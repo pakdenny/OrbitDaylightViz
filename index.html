@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solar Path Explorer</title>
+  <meta name="description" content="Interactive visualization of how Earth's orbital position and axial tilt affect sunrise, sunset, and the sun's path across the sky at different latitudes.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #080c18; overflow-x: hidden; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script type="text/babel">
+    const { useState, useRef, useEffect, useCallback } = React;
+
+
+const DEG = Math.PI / 180;
+const RAD = 180 / Math.PI;
+const AXIAL_TILT = 23.44;
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTH_DAYS = [31,29,31,30,31,30,31,31,30,31,30,31];
+
+// Quaternion utilities
+function qMul(a, b) {
+  return [
+    a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
+    a[0]*b[1]+a[1]*b[0]+a[2]*b[3]-a[3]*b[2],
+    a[0]*b[2]-a[1]*b[3]+a[2]*b[0]+a[3]*b[1],
+    a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0],
+  ];
+}
+function qNorm(q) {
+  const l = Math.sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3]);
+  return l > 0 ? [q[0]/l,q[1]/l,q[2]/l,q[3]/l] : [1,0,0,0];
+}
+function qFromAxisAngle(ax, ay, az, angle) {
+  const ha = angle/2, s = Math.sin(ha);
+  return qNorm([Math.cos(ha), ax*s, ay*s, az*s]);
+}
+function qRotVec(q, v) {
+  const qv = [0,v[0],v[1],v[2]];
+  const qC = [q[0],-q[1],-q[2],-q[3]];
+  const r = qMul(qMul(q,qv),qC);
+  return [r[1],r[2],r[3]];
+}
+function qInitView() {
+  const pitch = qFromAxisAngle(1,0,0,40*DEG);
+  const yaw = qFromAxisAngle(0,0,1,-90*DEG);
+  return qNorm(qMul(yaw, pitch));
+}
+
+function monthDayFromDOY(doy) { let d=Math.max(1,Math.min(366,Math.round(doy))); for(let i=0;i<12;i++){if(d<=MONTH_DAYS[i])return{month:i,day:d};d-=MONTH_DAYS[i];}return{month:11,day:31}; }
+function solarDeclination(doy) { return AXIAL_TILT*Math.sin((360/365)*(doy-81)*DEG); }
+function sunriseHourAngle(lat,decl) { const c=-Math.tan(lat*DEG)*Math.tan(decl*DEG); if(c<-1)return 180; if(c>1)return 0; return Math.acos(c)*RAD; }
+function solarPosition(lat,decl,ha) {
+  const sA=Math.sin(lat*DEG)*Math.sin(decl*DEG)+Math.cos(lat*DEG)*Math.cos(decl*DEG)*Math.cos(ha*DEG);
+  const alt=Math.asin(Math.max(-1,Math.min(1,sA)))*RAD;
+  const cAz=(Math.sin(decl*DEG)-Math.sin(lat*DEG)*sA)/(Math.cos(lat*DEG)*Math.cos(alt*DEG)+0.0001);
+  let az=Math.acos(Math.max(-1,Math.min(1,cAz)))*RAD;
+  if(ha>0)az=360-az; return{altitude:alt,azimuth:az};
+}
+function formatTime(sh) { let h=Math.floor(sh)%24; if(h<0)h+=24; const m=Math.floor((sh-Math.floor(sh))*60); return `${h===0?12:h>12?h-12:h}:${m.toString().padStart(2,"0")} ${h>=12?"PM":"AM"}`; }
+
+const CONTINENTS = [
+  {color:"#3B8C4A",pts:[[60,-130],[65,-120],[70,-100],[70,-80],[65,-60],[50,-55],[45,-65],[40,-75],[30,-82],[25,-90],[28,-105],[32,-115],[40,-125],[50,-130]]},
+  {color:"#3B8C4A",pts:[[25,-90],[20,-100],[15,-95],[10,-84],[8,-78],[10,-75],[18,-75],[25,-82]]},
+  {color:"#3D8E4C",pts:[[10,-75],[5,-65],[2,-50],[-5,-35],[-15,-38],[-25,-42],[-35,-58],[-50,-68],[-55,-70],[-52,-75],[-40,-73],[-20,-65],[-5,-78],[5,-80]]},
+  {color:"#4A9652",pts:[[38,-8],[42,0],[44,5],[48,5],[52,10],[55,12],[60,20],[65,28],[70,30],[68,40],[60,38],[55,35],[50,25],[48,18],[45,15],[42,12],[38,5]]},
+  {color:"#5A9A52",pts:[[35,0],[32,10],[30,32],[22,38],[12,42],[5,42],[0,40],[-5,38],[-15,35],[-25,30],[-34,25],[-35,18],[-30,15],[-20,12],[-10,12],[-5,8],[2,2],[5,-5],[10,-12],[15,-16],[25,-15],[32,-8]]},
+  {color:"#4D9050",pts:[[42,40],[45,50],[50,55],[55,60],[60,70],[65,80],[68,100],[70,120],[65,135],[55,140],[45,135],[35,130],[25,120],[15,105],[10,98],[15,80],[22,72],[30,65],[35,55],[38,45]]},
+  {color:"#4D9050",pts:[[28,68],[25,72],[20,78],[15,80],[10,78],[8,76],[10,72],[18,70],[25,68]]},
+  {color:"#6A944A",pts:[[-14,130],[-12,136],[-16,146],[-22,150],[-30,150],[-38,148],[-38,140],[-35,135],[-30,130],[-22,115],[-15,122]]},
+  {color:"rgba(210,230,240,0.5)",pts:[[62,-50],[65,-45],[70,-30],[75,-25],[78,-35],[80,-45],[78,-55],[75,-60],[70,-55],[65,-52]]},
+];
+
+// ─── ORBITAL VIEW ───────────────────────────────────────────────────────────
+
+function OrbitalView({ doy, latitude, solarHour, camQ, setCamQ, width, height }) {
+  const canvasRef = useRef(null);
+  const dragging = useRef(false);
+  const dragStartQ = useRef([1,0,0,0]);
+  const dragStartVec = useRef([0,0,1]);
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const ccx = width/2, ccy = height/2;
+
+    const camFwd = qRotVec(camQ,[0,0,1]);
+    const camRight = qRotVec(camQ,[1,0,0]);
+    const camUp = qRotVec(camQ,[0,1,0]);
+    const orbitScale = Math.min(width,height)*0.36;
+
+    function proj(p) {
+      return {
+        x: ccx+(p[0]*camRight[0]+p[1]*camRight[1]+p[2]*camRight[2])*orbitScale,
+        y: ccy-(p[0]*camUp[0]+p[1]*camUp[1]+p[2]*camUp[2])*orbitScale,
+        z: p[0]*camFwd[0]+p[1]*camFwd[1]+p[2]*camFwd[2],
+      };
+    }
+
+    ctx.clearRect(0,0,width,height);
+
+    // Stars
+    for(let i=0;i<80;i++){ctx.fillStyle=`rgba(200,210,230,${0.2+(i%5)*0.15})`;ctx.beginPath();ctx.arc((42*(i+1)*7919)%width,(42*(i+1)*6271)%height,0.5+(i%3)*0.4,0,Math.PI*2);ctx.fill();}
+
+    // ── Ecliptic reference disc ──
+    ctx.save();
+    ctx.beginPath();
+    for(let a=0;a<360;a+=3){const r=a*DEG;const p=proj([Math.cos(r)*1.08,Math.sin(r)*1.08,0]);if(a===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y);}
+    ctx.closePath();
+    ctx.fillStyle=`rgba(40,55,90,${0.06+Math.abs(camFwd[2])*0.04})`;
+    ctx.fill();
+    ctx.restore();
+
+    // ── Ecliptic grid (depth-faded) ──
+    ctx.lineWidth=0.5;
+    for(let g=-0.8;g<=0.8;g+=0.4){
+      let a=proj([g,-1.05,0]),b=proj([g,1.05,0]);
+      ctx.strokeStyle=`rgba(80,110,160,${(a.z+b.z)/2>0?0.09:0.04})`;
+      ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+      a=proj([-1.05,g,0]);b=proj([1.05,g,0]);
+      ctx.strokeStyle=`rgba(80,110,160,${(a.z+b.z)/2>0?0.09:0.04})`;
+      ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+    }
+
+    // ── Orbit path (continuous depth-fade) ──
+    ctx.setLineDash([6,4]);
+    const orbitPts=[];
+    for(let a=0;a<=362;a+=2){const r=a*DEG;orbitPts.push(proj([Math.cos(r),Math.sin(r),0]));}
+    for(let i=1;i<orbitPts.length;i++){
+      const p0=orbitPts[i-1],p1=orbitPts[i];
+      const t=Math.max(0,Math.min(1,((p0.z+p1.z)/2+1)/2));
+      ctx.strokeStyle=`rgba(100,150,220,${(0.12+t*0.48).toFixed(2)})`;
+      ctx.lineWidth=1.2+t*1.0;
+      ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.lineTo(p1.x,p1.y);ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // ── Season markers (depth-scaled) ──
+    const seasonData=[
+      {l:"Mar Eq",a:0,c:[102,187,106]},{l:"Jun Sol",a:Math.PI/2,c:[253,216,53]},
+      {l:"Sep Eq",a:Math.PI,c:[239,108,0]},{l:"Dec Sol",a:3*Math.PI/2,c:[66,165,245]},
+    ];
+    const seasonProj=seasonData.map(s=>({...s,orb:proj([Math.cos(s.a),Math.sin(s.a),0]),lbl:proj([Math.cos(s.a)*1.16,Math.sin(s.a)*1.16,0])}));
+    seasonProj.sort((a,b)=>a.orb.z-b.orb.z);
+    seasonProj.forEach(s=>{
+      const t=Math.max(0,Math.min(1,(s.orb.z+1)/2));
+      const dotR=2.5+t*2.5, al=(0.15+t*0.55).toFixed(2);
+      ctx.fillStyle=`rgba(${s.c[0]},${s.c[1]},${s.c[2]},${al})`;
+      ctx.beginPath();ctx.arc(s.orb.x,s.orb.y,dotR,0,Math.PI*2);ctx.fill();
+      ctx.font=`${9+t*2|0}px 'DM Sans', sans-serif`;
+      ctx.fillStyle=`rgba(180,195,215,${al})`;ctx.textAlign="center";
+      ctx.fillText(s.l,s.lbl.x,s.lbl.y+4);
+    });
+
+    // ── Sun & Earth: depth-ordered ──
+    const earthAngle=((doy-81)/365)*Math.PI*2;
+    const earthEcl=[Math.cos(earthAngle),Math.sin(earthAngle),0];
+    const sunP=proj([0,0,0]),eP=proj(earthEcl);
+    const sunInFront=sunP.z>eP.z;
+
+    function drawSun(){
+      const sR=Math.min(width,height)*0.027,gR=sR*4;
+      const sG=ctx.createRadialGradient(sunP.x,sunP.y,0,sunP.x,sunP.y,gR);
+      sG.addColorStop(0,"rgba(255,220,100,0.9)");sG.addColorStop(0.15,"rgba(255,200,70,0.5)");
+      sG.addColorStop(0.35,"rgba(255,180,50,0.2)");sG.addColorStop(0.6,"rgba(255,140,30,0.06)");sG.addColorStop(1,"rgba(255,100,0,0)");
+      ctx.fillStyle=sG;ctx.beginPath();ctx.arc(sunP.x,sunP.y,gR,0,Math.PI*2);ctx.fill();
+      const sB=ctx.createRadialGradient(sunP.x-sR*0.15,sunP.y-sR*0.15,0,sunP.x,sunP.y,sR);
+      sB.addColorStop(0,"#FFFEF0");sB.addColorStop(0.3,"#FFF9C4");sB.addColorStop(0.6,"#FFD54F");sB.addColorStop(0.85,"#FFB74D");sB.addColorStop(1,"#FF9800");
+      ctx.fillStyle=sB;ctx.beginPath();ctx.arc(sunP.x,sunP.y,sR,0,Math.PI*2);ctx.fill();
+      const lG=ctx.createRadialGradient(sunP.x,sunP.y,sR*0.85,sunP.x,sunP.y,sR);
+      lG.addColorStop(0,"rgba(255,152,0,0)");lG.addColorStop(1,"rgba(230,100,0,0.3)");
+      ctx.fillStyle=lG;ctx.beginPath();ctx.arc(sunP.x,sunP.y,sR,0,Math.PI*2);ctx.fill();
+    }
+
+    function drawEarth(){
+      // Light beam
+      ctx.strokeStyle="rgba(255,220,100,0.05)";ctx.lineWidth=25;
+      ctx.beginPath();ctx.moveTo(sunP.x,sunP.y);ctx.lineTo(eP.x,eP.y);ctx.stroke();
+
+      const earthR=Math.min(width,height)*0.140625;
+      const eOff=document.createElement("canvas");
+      eOff.width=earthR*2+4;eOff.height=earthR*2+4;
+      const ec=eOff.getContext("2d");
+      const ecx=earthR+2,ecy=earthR+2,R=earthR;
+
+      const oG=ec.createRadialGradient(ecx-R*0.25,ecy-R*0.2,0,ecx,ecy,R);
+      oG.addColorStop(0,"#5A9FD0");oG.addColorStop(0.4,"#3A80B8");oG.addColorStop(0.75,"#2565A0");oG.addColorStop(1,"#1A4A7A");
+      ec.fillStyle=oG;ec.beginPath();ec.arc(ecx,ecy,R,0,Math.PI*2);ec.fill();
+      ec.save();ec.beginPath();ec.arc(ecx,ecy,R,0,Math.PI*2);ec.clip();
+
+      const eps=AXIAL_TILT*DEG;
+      const axVec=[0,-Math.sin(eps),Math.cos(eps)];
+      const sd=[-Math.cos(earthAngle),-Math.sin(earthAngle),0];
+      const sdDA=sd[0]*axVec[0]+sd[1]*axVec[1]+sd[2]*axVec[2];
+      const sP=[sd[0]-sdDA*axVec[0],sd[1]-sdDA*axVec[1],sd[2]-sdDA*axVec[2]];
+      const spL=Math.sqrt(sP[0]**2+sP[1]**2+sP[2]**2);
+      let e1,e2;
+      if(spL>0.001){e1=[sP[0]/spL,sP[1]/spL,sP[2]/spL];e2=[axVec[1]*e1[2]-axVec[2]*e1[1],axVec[2]*e1[0]-axVec[0]*e1[2],axVec[0]*e1[1]-axVec[1]*e1[0]];}
+      else{e1=[1,0,0];e2=[0,0,-1];}
+
+      const haR=(solarHour-12)*15*DEG;
+      function geoTo3D(la,lo){const lr=la*DEG,ph=haR+lo*DEG;return[Math.sin(lr)*axVec[0]+Math.cos(lr)*(Math.cos(ph)*e1[0]+Math.sin(ph)*e2[0]),Math.sin(lr)*axVec[1]+Math.cos(lr)*(Math.cos(ph)*e1[1]+Math.sin(ph)*e2[1]),Math.sin(lr)*axVec[2]+Math.cos(lr)*(Math.cos(ph)*e1[2]+Math.sin(ph)*e2[2])];}
+      function projE(v){const sx=v[0]*camRight[0]+v[1]*camRight[1]+v[2]*camRight[2],sy=v[0]*camUp[0]+v[1]*camUp[1]+v[2]*camUp[2],sz=v[0]*camFwd[0]+v[1]*camFwd[1]+v[2]*camFwd[2];return{x:ecx+sx*R*0.9,y:ecy-sy*R*0.9,z:sz};}
+
+      // Continents
+      CONTINENTS.forEach(c=>{const pr=c.pts.map(([la,lo])=>projE(geoTo3D(la,lo)));if(pr.filter(p=>p.z>0).length===0)return;ec.fillStyle=c.color;ec.beginPath();let s=false;pr.forEach(p=>{if(p.z>-0.05){if(!s){ec.moveTo(p.x,p.y);s=true;}else ec.lineTo(p.x,p.y);}else{const l=Math.sqrt((p.x-ecx)**2+(p.y-ecy)**2)||1;if(!s){ec.moveTo(ecx+(p.x-ecx)/l*R*0.9,ecy+(p.y-ecy)/l*R*0.9);s=true;}else ec.lineTo(ecx+(p.x-ecx)/l*R*0.9,ecy+(p.y-ecy)/l*R*0.9);}});ec.closePath();ec.fill();});
+
+      // Poles
+      [90,-90].forEach(pl=>{const p=projE(geoTo3D(pl,0));if(p.z>0){ec.fillStyle="rgba(220,235,245,0.4)";ec.beginPath();ec.arc(p.x,p.y,R*(pl>0?0.12:0.15),0,Math.PI*2);ec.fill();}});
+
+      // Atmosphere rim
+      const aG=ec.createRadialGradient(ecx,ecy,R*0.88,ecx,ecy,R);
+      aG.addColorStop(0,"rgba(100,180,255,0)");aG.addColorStop(0.5,"rgba(100,180,255,0.04)");aG.addColorStop(1,"rgba(80,160,240,0.18)");
+      ec.fillStyle=aG;ec.beginPath();ec.arc(ecx,ecy,R,0,Math.PI*2);ec.fill();
+
+      // Day/night ellipse terminator (draw BEFORE observer so dot is visible on both sides)
+      // sd points Earth→Sun. sdCF > 0 means Sun-side faces camera = daylight visible.
+      const sdCR=sd[0]*camRight[0]+sd[1]*camRight[1]+sd[2]*camRight[2];
+      const sdCU=sd[0]*camUp[0]+sd[1]*camUp[1]+sd[2]*camUp[2];
+      const sdCF=sd[0]*camFwd[0]+sd[1]*camFwd[1]+sd[2]*camFwd[2];
+      const al=Math.atan2(-sdCU,sdCR);
+      ec.fillStyle="rgba(0,5,20,0.65)";
+      if(sdCF<-0.998){
+        // Looking at night side — full shadow
+        ec.beginPath();ec.arc(ecx,ecy,R+1,0,Math.PI*2);ec.fill();
+      } else if(sdCF<0.998){
+        // General case: -sdCF so ellipse bows toward dark side
+        ec.save();ec.translate(ecx,ecy);ec.rotate(al);ec.beginPath();
+        for(let i=0;i<=40;i++){const t=Math.PI/2-(i/40)*Math.PI;const px=-sdCF*R*Math.cos(t),py=R*Math.sin(t);if(i===0)ec.moveTo(px,py);else ec.lineTo(px,py);}
+        ec.arc(0,0,R+0.5,-Math.PI/2,Math.PI/2,true);ec.closePath();ec.fill();
+        const pnG=ec.createLinearGradient(-R*0.3,0,R*0.5,0);pnG.addColorStop(0,"rgba(0,5,20,0)");pnG.addColorStop(1,"rgba(0,5,20,0.25)");
+        ec.fillStyle=pnG;ec.beginPath();ec.arc(0,0,R,0,Math.PI*2);ec.fill();ec.restore();
+      }
+      // sdCF >= 0.998: looking at daylight side — no shadow needed
+
+      // Latitude ring (on top of shadow)
+      ec.strokeStyle="rgba(255,120,120,0.25)";ec.lineWidth=1;ec.setLineDash([2,3]);ec.beginPath();
+      let rOn=false;for(let t=0;t<=360;t+=5){const p=projE(geoTo3D(latitude,t));if(p.z>0){if(!rOn){ec.moveTo(p.x,p.y);rOn=true;}else ec.lineTo(p.x,p.y);}else rOn=false;}
+      ec.stroke();ec.setLineDash([]);
+
+      // Observer (on top of shadow so always visible)
+      const obsP=projE(geoTo3D(latitude,0));
+      const obsFront=obsP.z>-0.1;
+      if(obsFront){ec.fillStyle="rgba(255,80,80,0.35)";ec.beginPath();ec.arc(obsP.x,obsP.y,7,0,Math.PI*2);ec.fill();ec.fillStyle="#FF5252";ec.strokeStyle="rgba(255,255,255,0.85)";ec.lineWidth=1.5;ec.beginPath();ec.arc(obsP.x,obsP.y,3.5,0,Math.PI*2);ec.fill();ec.stroke();}
+      else{ec.fillStyle="rgba(180,140,140,0.15)";ec.beginPath();ec.arc(obsP.x,obsP.y,6,0,Math.PI*2);ec.fill();ec.fillStyle="rgba(180,120,120,0.3)";ec.strokeStyle="rgba(200,200,200,0.2)";ec.lineWidth=1;ec.beginPath();ec.arc(obsP.x,obsP.y,3,0,Math.PI*2);ec.fill();ec.stroke();}
+
+      ec.restore();
+
+      // Composite
+      const atG=ctx.createRadialGradient(eP.x,eP.y,earthR,eP.x,eP.y,earthR+6);
+      atG.addColorStop(0,"rgba(80,160,255,0.2)");atG.addColorStop(1,"rgba(80,160,255,0)");
+      ctx.fillStyle=atG;ctx.beginPath();ctx.arc(eP.x,eP.y,earthR+6,0,Math.PI*2);ctx.fill();
+      ctx.drawImage(eOff,eP.x-earthR-2,eP.y-earthR-2);
+
+      // Axis
+      const axPL=(earthR+14)/orbitScale;
+      const npW=[earthEcl[0]+axVec[0]*axPL,earthEcl[1]+axVec[1]*axPL,earthEcl[2]+axVec[2]*axPL];
+      const spW=[earthEcl[0]-axVec[0]*axPL,earthEcl[1]-axVec[1]*axPL,earthEcl[2]-axVec[2]*axPL];
+      const npS=proj(npW),spS=proj(spW);
+      // Depth-fade axis
+      const axT=Math.max(0,Math.min(1,(eP.z+1)/2));
+      ctx.strokeStyle=`rgba(200,220,255,${(0.2+axT*0.5).toFixed(2)})`;ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(spS.x,spS.y);ctx.lineTo(npS.x,npS.y);ctx.stroke();
+      ctx.fillStyle=`rgba(144,202,249,${(0.3+axT*0.5).toFixed(2)})`;ctx.beginPath();ctx.arc(npS.x,npS.y,3+axT*2,0,Math.PI*2);ctx.fill();
+      ctx.font=`${9+axT*2|0}px 'DM Sans', sans-serif`;ctx.fillStyle=`rgba(144,202,249,${(0.3+axT*0.5).toFixed(2)})`;
+      ctx.textAlign="center";ctx.fillText("N",npS.x,npS.y-8-axT*2);
+
+      // Observer orbit circle (full 360° path in 3D space, day/night colored)
+      const orbR=earthR*0.9/orbitScale; // match observer dot position on Earth surface
+      ctx.setLineDash([4,4]);
+      ctx.lineWidth=6;
+      let orbOn=false;
+      for(let t=0;t<=362;t+=3){
+        const v=geoTo3D(latitude,t);
+        const wp=[earthEcl[0]+v[0]*orbR,earthEcl[1]+v[1]*orbR,earthEcl[2]+v[2]*orbR];
+        const p=proj(wp);
+        // Depth-fade: front portions brighter
+        const vz=v[0]*camFwd[0]+v[1]*camFwd[1]+v[2]*camFwd[2];
+        const depthAl=0.15+Math.max(0,vz)*0.65;
+        // Day/night: dot product with sun direction
+        const sunDot=v[0]*sd[0]+v[1]*sd[1]+v[2]*sd[2];
+        const isDay=sunDot>0;
+        const r=isDay?255:200, g=isDay?230:100, b=isDay?0:255;
+        const al=depthAl.toFixed(2);
+        if(t===0||!orbOn){
+          ctx.strokeStyle=`rgba(${r},${g},${b},${al})`;
+          ctx.beginPath();ctx.moveTo(p.x,p.y);orbOn=true;
+        } else {
+          ctx.lineTo(p.x,p.y);ctx.stroke();
+          ctx.strokeStyle=`rgba(${r},${g},${b},${al})`;
+          ctx.beginPath();ctx.moveTo(p.x,p.y);
+        }
+      }
+      if(orbOn)ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Observer label
+      const olA=obsFront?0.85:0.3;
+      ctx.font="bold 9px 'DM Mono', monospace";ctx.fillStyle=`rgba(255,100,100,${olA})`;ctx.textAlign="center";
+      ctx.fillText(`${Math.abs(latitude).toFixed(0)}°${latitude>=0?"N":"S"}`,eP.x+(obsP.x-ecx),eP.y+(obsP.y-ecy)-9);
+
+      // Date
+      const{month,day}=monthDayFromDOY(doy);
+      ctx.font="bold 12px 'DM Mono', monospace";ctx.fillStyle="#B0BEC5";ctx.textAlign="center";
+      ctx.fillText(`${MONTHS[month]} ${day}`,eP.x,eP.y+earthR+22);
+    }
+
+    // Depth-ordered rendering
+    if(sunInFront){drawEarth();drawSun();}else{drawSun();drawEarth();}
+
+    // ── Orientation gizmo (centered on sun) ──
+    const gx=sunP.x,gy=sunP.y,gl=22;
+    const axes=[{v:[1,0,0],c:"255,100,100",l:"X"},{v:[0,1,0],c:"100,255,100",l:"Y"},{v:[0,0,1],c:"100,150,255",l:"Z"}];
+    const axP=axes.map(a=>{
+      const sx=a.v[0]*camRight[0]+a.v[1]*camRight[1]+a.v[2]*camRight[2];
+      const sy=a.v[0]*camUp[0]+a.v[1]*camUp[1]+a.v[2]*camUp[2];
+      const sz=a.v[0]*camFwd[0]+a.v[1]*camFwd[1]+a.v[2]*camFwd[2];
+      return{...a,ex:gx+sx*gl,ey:gy-sy*gl,z:sz};
+    });
+    axP.sort((a,b)=>a.z-b.z);
+    axP.forEach(a=>{
+      const al=(0.25+Math.max(0,a.z)*0.55).toFixed(2);
+      ctx.strokeStyle=`rgba(${a.c},${al})`;ctx.lineWidth=1+Math.max(0,a.z)*1.5;
+      ctx.beginPath();ctx.moveTo(gx,gy);ctx.lineTo(a.ex,a.ey);ctx.stroke();
+      ctx.fillStyle=`rgba(${a.c},${al})`;ctx.beginPath();ctx.arc(a.ex,a.ey,2+Math.max(0,a.z)*1.5,0,Math.PI*2);ctx.fill();
+      ctx.font="bold 9px 'DM Mono', monospace";ctx.textAlign="center";
+      ctx.fillText(a.l,gx+(a.ex-gx)*1.35,gy+(a.ey-gy)*1.35+3);
+    });
+
+  }, [doy, latitude, solarHour, camQ, width, height]);
+
+  useEffect(()=>{draw();},[draw]);
+
+  // Arcball
+  const screenToSphere=useCallback((cx,cy)=>{
+    const rect=canvasRef.current?.getBoundingClientRect();
+    if(!rect)return[0,0,1];
+    const x=((cx-rect.left)/rect.width-0.5)*2,y=-((cy-rect.top)/rect.height-0.5)*2;
+    const r2=x*x+y*y;
+    if(r2<=1)return[x,y,Math.sqrt(1-r2)];
+    const l=Math.sqrt(r2);return[x/l,y/l,0];
+  },[]);
+
+  const handleDown=useCallback((cx,cy)=>{dragging.current=true;dragStartQ.current=camQ;dragStartVec.current=screenToSphere(cx,cy);},[camQ,screenToSphere]);
+  const handleMove=useCallback((cx,cy)=>{
+    if(!dragging.current)return;
+    const v0=dragStartVec.current,v1=screenToSphere(cx,cy);
+    // Cross product = rotation axis in screen space
+    const sx=v0[1]*v1[2]-v0[2]*v1[1], sy=v0[2]*v1[0]-v0[0]*v1[2], sz=v0[0]*v1[1]-v0[1]*v1[0];
+    const dot=v0[0]*v1[0]+v0[1]*v1[1]+v0[2]*v1[2];
+    const cl=Math.sqrt(sx*sx+sy*sy+sz*sz); if(cl<1e-8)return;
+    const angle=Math.atan2(cl,dot);
+    // Convert screen-space axis to world space using the camera basis at drag start
+    const startQ=dragStartQ.current;
+    const cR=qRotVec(startQ,[1,0,0]), cU=qRotVec(startQ,[0,1,0]), cF=qRotVec(startQ,[0,0,1]);
+    const nsx=sx/cl, nsy=sy/cl, nsz=sz/cl;
+    // World axis = screen_x * camRight + screen_y * camUp + screen_z * camFwd
+    const wx=nsx*cR[0]+nsy*cU[0]+nsz*cF[0];
+    const wy=nsx*cR[1]+nsy*cU[1]+nsz*cF[1];
+    const wz=nsx*cR[2]+nsy*cU[2]+nsz*cF[2];
+    // Apply world-space rotation to starting camera orientation
+    const rotQ=qFromAxisAngle(wx,wy,wz,-angle);
+    setCamQ(qNorm(qMul(rotQ,startQ)));
+  },[screenToSphere,setCamQ]);
+  const handleUp=useCallback(()=>{dragging.current=false;},[]);
+
+  return(
+    <canvas ref={canvasRef} width={width} height={height}
+      style={{cursor:"grab",width:"100%",height:"100%"}}
+      onMouseDown={e=>handleDown(e.clientX,e.clientY)}
+      onMouseMove={e=>handleMove(e.clientX,e.clientY)}
+      onMouseUp={handleUp} onMouseLeave={handleUp}
+      onTouchStart={e=>handleDown(e.touches[0].clientX,e.touches[0].clientY)}
+      onTouchMove={e=>handleMove(e.touches[0].clientX,e.touches[0].clientY)}
+      onTouchEnd={handleUp}
+    />
+  );
+}
+
+// ─── HORIZON VIEW ───────────────────────────────────────────────────────────
+
+function HorizonView({doy,latitude,solarHour,width,height}) {
+  const canvasRef=useRef(null);
+  const draw=useCallback(()=>{
+    const canvas=canvasRef.current;if(!canvas)return;
+    const ctx=canvas.getContext("2d");
+    const decl=solarDeclination(doy),srHA=sunriseHourAngle(latitude,decl);
+    const isPD=Math.abs(latitude+decl)>=90&&latitude*decl>0;
+    const isPN=Math.abs(latitude-decl)>=90&&latitude*decl<0;
+    const hY=height*0.68,sT=10;
+    // Face toward the noon sun so the arc is always continuous across the view
+    const noonSun=solarPosition(latitude,decl,0);
+    const south=noonSun.azimuth>90&&noonSun.azimuth<270;
+    const curHA=(solarHour-12)*15,curSun=solarPosition(latitude,decl,curHA),sunUp=curSun.altitude>0;
+    ctx.clearRect(0,0,width,height);
+
+    // Sky
+    const sg=ctx.createLinearGradient(0,sT,0,hY);
+    if(isPN||(!isPD&&!sunUp&&curSun.altitude<-18)){sg.addColorStop(0,"#050810");sg.addColorStop(1,"#0a0f1e");}
+    else if(!sunUp&&curSun.altitude>=-18){const tw=Math.max(0,(curSun.altitude+18)/18);sg.addColorStop(0,`rgb(${10+tw*50|0},${12+tw*30|0},${25+tw*45|0})`);sg.addColorStop(1,`rgb(${15+tw*80|0},${18+tw*50|0},${35+tw*50|0})`);}
+    else if(curSun.altitude<10){sg.addColorStop(0,"#1a2a4a");sg.addColorStop(0.5,"#2a4a6a");sg.addColorStop(1,"#6a5a40");}
+    else if(curSun.altitude<40){sg.addColorStop(0,"#1a3a6a");sg.addColorStop(0.5,"#2a5a8a");sg.addColorStop(1,"#4a7a9a");}
+    else{sg.addColorStop(0,"#1a4a8a");sg.addColorStop(0.5,"#2a6aaa");sg.addColorStop(1,"#4a8aba");}
+    ctx.fillStyle=sg;ctx.fillRect(0,sT,width,hY-sT);
+
+    // Stars at night
+    if(curSun.altitude<-6){const sa=Math.min(1,(-curSun.altitude-6)/12)*0.7;for(let i=0;i<50;i++){ctx.fillStyle=`rgba(200,210,230,${sa*(0.3+(i%4)*0.2)})`;ctx.beginPath();ctx.arc(((37*(i+1)*7919)%(width-20))+10,((37*(i+1)*4271)%(hY-sT-20))+sT+10,0.5+(i%3)*0.3,0,Math.PI*2);ctx.fill();}}
+
+    // Horizon glow
+    if(Math.abs(curSun.altitude)<10&&!isPN){const gi=Math.max(0,1-Math.abs(curSun.altitude)/10)*0.25;const hx=azToX(curSun.azimuth,width,south);const hg=ctx.createRadialGradient(hx,hY,0,hx,hY,width*0.4);hg.addColorStop(0,`rgba(255,160,60,${gi})`);hg.addColorStop(0.5,`rgba(255,120,40,${gi*0.3})`);hg.addColorStop(1,"rgba(255,100,30,0)");ctx.fillStyle=hg;ctx.fillRect(0,sT,width,hY-sT);}
+
+    // Ground
+    const gG=ctx.createLinearGradient(0,hY,0,height);gG.addColorStop(0,sunUp?"#1e3520":"#101a10");gG.addColorStop(1,sunUp?"#0e1a0e":"#060e06");
+    ctx.fillStyle=gG;ctx.fillRect(0,hY,width,height-hY);
+    ctx.strokeStyle=sunUp?"rgba(180,160,100,0.2)":"rgba(100,110,130,0.15)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,hY);ctx.lineTo(width,hY);ctx.stroke();
+
+    // Cardinals
+    ctx.font="bold 11px 'DM Mono', monospace";ctx.textAlign="center";
+    [{l:"N",a:0},{l:"NE",a:45},{l:"E",a:90},{l:"SE",a:135},{l:"S",a:180},{l:"SW",a:225},{l:"W",a:270},{l:"NW",a:315}].forEach(c=>{const x=azToX(c.a,width,south);if(x>=0&&x<=width){ctx.fillStyle=c.l.length===1?"rgba(180,190,200,0.6)":"rgba(180,190,200,0.3)";ctx.fillText(c.l,x,hY+18);ctx.strokeStyle="rgba(180,190,200,0.08)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,sT);ctx.lineTo(x,hY);ctx.stroke();}});
+
+    // Alt grid
+    ctx.font="9px 'DM Mono', monospace";ctx.textAlign="left";
+    for(let a=15;a<=90;a+=15){const y=altToY(a,hY,sT);ctx.strokeStyle="rgba(180,190,200,0.05)";ctx.fillStyle="rgba(180,190,200,0.2)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke();ctx.fillText(`${a}°`,6,y-3);}
+
+    if(isPN){ctx.font="16px 'DM Sans', sans-serif";ctx.fillStyle="rgba(150,170,200,0.6)";ctx.textAlign="center";ctx.fillText("Polar Night — Sun does not rise",width/2,height*0.35);return;}
+
+    const stHA=isPD?-180:-srHA,enHA=isPD?180:srHA;
+    const pp=[];for(let ha=stHA;ha<=enHA;ha+=0.5){const pos=solarPosition(latitude,decl,ha);if(pos.altitude>=-2)pp.push({x:azToX(pos.azimuth,width,south),y:altToY(Math.max(0,pos.altitude),hY,sT),ha});}
+
+    if(pp.length>1){
+      // Full path
+      ctx.strokeStyle="rgba(255,200,80,0.18)";ctx.lineWidth=1.5;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(pp[0].x,pp[0].y);
+      for(let i=1;i<pp.length;i++){if(Math.abs(pp[i].x-pp[i-1].x)<width*0.5)ctx.lineTo(pp[i].x,pp[i].y);else ctx.moveTo(pp[i].x,pp[i].y);}ctx.stroke();ctx.setLineDash([]);
+
+      // Traversed
+      if(curHA>=stHA&&curHA<=enHA){const tv=pp.filter(p=>p.ha<=curHA);if(tv.length>1){ctx.strokeStyle="rgba(255,200,80,0.5)";ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(tv[0].x,tv[0].y);for(let i=1;i<tv.length;i++){if(Math.abs(tv[i].x-tv[i-1].x)<width*0.5)ctx.lineTo(tv[i].x,tv[i].y);else ctx.moveTo(tv[i].x,tv[i].y);}ctx.stroke();}}
+
+      // Hour markers
+      for(let ha=Math.ceil(stHA/15)*15;ha<=enHA;ha+=15){const pos=solarPosition(latitude,decl,ha);if(pos.altitude>=0){const x=azToX(pos.azimuth,width,south),y=altToY(pos.altitude,hY,sT);const hh=Math.floor(12+ha/15),ampm=hh>=12?"pm":"am",h12=hh===0?12:hh>12?hh-12:hh;ctx.fillStyle="rgba(255,220,120,0.4)";ctx.beginPath();ctx.arc(x,y,2.5,0,Math.PI*2);ctx.fill();ctx.font="9px 'DM Mono', monospace";ctx.fillStyle="rgba(255,220,120,0.35)";ctx.textAlign="center";ctx.fillText(`${h12}${ampm}`,x,y-7);}}
+
+      // Rise/set
+      if(!isPD){[{ha:-srHA,l:"RISE"},{ha:srHA,l:"SET"}].forEach(s=>{const pos=solarPosition(latitude,decl,s.ha);const x=azToX(pos.azimuth,width,south);ctx.fillStyle="rgba(255,160,60,0.6)";ctx.beginPath();ctx.arc(x,hY,4,0,Math.PI*2);ctx.fill();ctx.font="bold 9px 'DM Mono', monospace";ctx.fillStyle="rgba(255,180,80,0.7)";ctx.textAlign="center";ctx.fillText(s.l,x,hY-9);ctx.font="9px 'DM Mono', monospace";ctx.fillStyle="rgba(255,180,80,0.4)";ctx.fillText(`${Math.round(pos.azimuth)}°`,x,hY+30);});}
+    }
+
+    // Animated sun
+    if(curSun.altitude>-4){const sx=azToX(curSun.azimuth,width,south),sy=altToY(Math.max(-2,curSun.altitude),hY,sT),vis=Math.min(1,(curSun.altitude+4)/6);
+      if(curSun.altitude>0){const gr=ctx.createRadialGradient(sx,sy,0,sx,sy,40);gr.addColorStop(0,`rgba(255,240,150,${0.7*vis})`);gr.addColorStop(0.3,`rgba(255,200,80,${0.2*vis})`);gr.addColorStop(1,"rgba(255,180,50,0)");ctx.fillStyle=gr;ctx.beginPath();ctx.arc(sx,sy,40,0,Math.PI*2);ctx.fill();}
+      const bR=curSun.altitude>0?10:10*vis,g=curSun.altitude<5?(160+curSun.altitude*12)|0:220,b=curSun.altitude<5?(50+curSun.altitude*10)|0:100;
+      const sb=ctx.createRadialGradient(sx,sy,0,sx,sy,bR);sb.addColorStop(0,`rgba(255,255,240,${vis})`);sb.addColorStop(0.5,`rgba(255,${g},${b},${vis})`);sb.addColorStop(1,`rgba(255,${Math.max(100,g-40)},${Math.max(0,b-30)},${vis*0.8})`);
+      ctx.fillStyle=sb;ctx.beginPath();ctx.arc(sx,sy,bR,0,Math.PI*2);ctx.fill();
+      ctx.font="bold 10px 'DM Mono', monospace";ctx.fillStyle=`rgba(255,220,120,${vis*0.9})`;ctx.textAlign="center";ctx.fillText(formatTime(solarHour),sx,sy-bR-6);
+    }else{ctx.font="11px 'DM Mono', monospace";ctx.fillStyle="rgba(140,160,190,0.5)";ctx.textAlign="center";ctx.fillText(`${formatTime(solarHour)} — sun below horizon`,width/2,height-14);}
+    if(isPD){ctx.font="11px 'DM Sans', sans-serif";ctx.fillStyle="rgba(255,220,150,0.4)";ctx.textAlign="center";ctx.fillText("Midnight Sun — 24h daylight",width/2,height-14);}
+  },[doy,latitude,solarHour,width,height]);
+  useEffect(()=>{draw();},[draw]);
+  return (<canvas ref={canvasRef} width={width} height={height} style={{width:"100%",height:"100%"}} />);
+}
+
+function azToX(az,w,south){
+  const m=40,u=w-m*2;
+  let delta=south?(az-180):az;
+  if(delta>180)delta-=360;if(delta<-180)delta+=360;
+  return m+((delta+150)/300)*u;
+}
+function altToY(a,hY,sT){return hY-(a/90)*(hY-sT);}
+
+// ─── INFO PANEL ─────────────────────────────────────────────────────────────
+
+function InfoPanel({doy,latitude,solarHour}){
+  const decl=solarDeclination(doy),ha=sunriseHourAngle(latitude,decl);
+  const{month,day}=monthDayFromDOY(doy);const isPD=ha>=180,isPN=ha<=0;
+  let dL,sr,ss;
+  if(isPD){dL="24:00";sr="—";ss="—";}else if(isPN){dL="0:00";sr="—";ss="—";}
+  else{const h=(2*ha)/15;dL=`${Math.floor(h)}h ${Math.round((h-Math.floor(h))*60).toString().padStart(2,"0")}m`;sr=formatTime(12-ha/15);ss=formatTime(12+ha/15);}
+  const nA=90-Math.abs(latitude-decl),cS=solarPosition(latitude,decl,(solarHour-12)*15);
+  return(
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"10px",padding:"14px 16px",background:"rgba(15,20,35,0.8)",borderRadius:"8px",border:"1px solid rgba(80,100,140,0.2)"}}>
+      {[{l:"Current Time",v:formatTime(solarHour),h:true},{l:"Sun Altitude",v:`${cS.altitude.toFixed(1)}°`},{l:"Sunrise",v:sr},{l:"Sunset",v:ss},{l:"Day Length",v:dL},{l:"Noon Alt.",v:`${nA.toFixed(1)}°`},{l:"Declination",v:`${decl>=0?"+":""}${decl.toFixed(1)}°`},{l:"Date",v:`${MONTHS[month]} ${day}`}].map((item,i)=>(
+        <div key={i} style={{textAlign:"center"}}>
+          <div style={{fontSize:"9px",textTransform:"uppercase",letterSpacing:"1.2px",color:"rgba(140,160,190,0.55)",marginBottom:"3px",fontFamily:"'DM Mono', monospace"}}>{item.l}</div>
+          <div style={{fontSize:"14px",color:item.h?"#FFD54F":"#C8D6E5",fontFamily:"'DM Mono', monospace",fontWeight:item.h?600:500}}>{item.v}</div>
+        </div>))}
+    </div>);
+}
+
+// ─── MAIN ───────────────────────────────────────────────────────────────────
+
+function SolarVisualization(){
+  const[doy,setDoy]=useState(172);
+  const[latitude,setLatitude]=useState(46.14);
+  const[solarHour,setSolarHour]=useState(12);
+  const[isPlaying,setIsPlaying]=useState(false);
+  const[speed,setSpeed]=useState(1);
+  const[isPlayingYear,setIsPlayingYear]=useState(false);
+  const[yearSpeed,setYearSpeed]=useState(1);
+  const[cam,setCam]=useState(()=>qInitView());
+  const containerRef=useRef(null);
+  const[dims,setDims]=useState({w:800});
+  const animRef=useRef(null);
+  const lastTimeRef=useRef(null);
+  const yearAnimRef=useRef(null);
+  const yearLastTimeRef=useRef(null);
+
+  useEffect(()=>{const el=containerRef.current;if(!el)return;const obs=new ResizeObserver(e=>{setDims({w:Math.floor(e[0].contentRect.width)});});obs.observe(el);return()=>obs.disconnect();},[]);
+  useEffect(()=>{
+    if(!isPlaying){lastTimeRef.current=null;if(animRef.current)cancelAnimationFrame(animRef.current);return;}
+    const tick=(ts)=>{if(lastTimeRef.current===null)lastTimeRef.current=ts;const dt=(ts-lastTimeRef.current)/1000;lastTimeRef.current=ts;setSolarHour(p=>{let n=p+dt*(24/15)*speed;if(n>=24)n-=24;return n;});animRef.current=requestAnimationFrame(tick);};
+    animRef.current=requestAnimationFrame(tick);return()=>{if(animRef.current)cancelAnimationFrame(animRef.current);};
+  },[isPlaying,speed]);
+
+  // Year cycle: 365 days in ~20s at 1×
+  useEffect(()=>{
+    if(!isPlayingYear){yearLastTimeRef.current=null;if(yearAnimRef.current)cancelAnimationFrame(yearAnimRef.current);return;}
+    const tick=(ts)=>{
+      if(yearLastTimeRef.current===null)yearLastTimeRef.current=ts;
+      const dt=(ts-yearLastTimeRef.current)/1000;yearLastTimeRef.current=ts;
+      const daysPerSec=(365/20)*yearSpeed;
+      setDoy(p=>{let n=p+dt*daysPerSec;if(n>366)n-=365;return n;});
+      yearAnimRef.current=requestAnimationFrame(tick);
+    };
+    yearAnimRef.current=requestAnimationFrame(tick);
+    return()=>{if(yearAnimRef.current)cancelAnimationFrame(yearAnimRef.current);};
+  },[isPlayingYear,yearSpeed]);
+
+  const{month,day}=monthDayFromDOY(doy);
+  const noonAz=solarPosition(latitude,solarDeclination(doy),0).azimuth;
+  const facingSouth=noonAz>90&&noonAz<270;
+  const panelW=dims.w>700?Math.floor(dims.w/2-40):dims.w-40,panelH=Math.floor(panelW*0.85);
+  const presets=[{l:"Equator",v:0},{l:"Tropics",v:23.44},{l:"45°N",v:45},{l:"Arctic",v:66.56},{l:"North Pole",v:90}];
+  const speeds=[{l:"1×",v:1},{l:"2×",v:2},{l:"4×",v:4}];
+  const ls={fontSize:"10px",textTransform:"uppercase",letterSpacing:"2px",color:"rgba(140,160,190,0.5)",fontFamily:"'DM Mono', monospace"};
+  const vs={fontSize:"13px",color:"#C8D6E5",fontFamily:"'DM Mono', monospace"};
+
+  return(
+    <div ref={containerRef} style={{background:"linear-gradient(170deg,#080c18 0%,#0d1424 50%,#0f1a2e 100%)",minHeight:"100vh",padding:"24px 20px",fontFamily:"'DM Sans', sans-serif",color:"#C8D6E5",boxSizing:"border-box"}}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+      <div style={{textAlign:"center",marginBottom:"20px"}}>
+        <h1 style={{fontSize:"22px",fontWeight:300,letterSpacing:"3px",textTransform:"uppercase",color:"rgba(200,214,229,0.9)",margin:"0 0 4px 0"}}>Solar Path Explorer</h1>
+        <p style={{fontSize:"12px",color:"rgba(140,160,190,0.5)",fontFamily:"'DM Mono', monospace",letterSpacing:"1px",margin:0}}>Earth's orbit · Axial tilt · The sun across your sky</p>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:dims.w>700?"1fr 1fr":"1fr",gap:"16px",marginBottom:"16px"}}>
+        <div style={{background:"rgba(10,15,30,0.6)",borderRadius:"12px",border:"1px solid rgba(80,100,140,0.15)",padding:"12px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"8px"}}>
+            <div style={{...ls}}>Orbital View — drag to rotate</div>
+            <button onClick={()=>setCam(qInitView())} style={{background:"rgba(40,50,70,0.5)",border:"1px solid rgba(80,100,140,0.2)",borderRadius:"5px",padding:"2px 8px",color:"rgba(180,190,200,0.5)",fontSize:"9px",fontFamily:"'DM Mono', monospace",cursor:"pointer"}}>Reset</button>
+          </div>
+          <div style={{aspectRatio:"1 / 0.85"}}><OrbitalView doy={doy} latitude={latitude} solarHour={solarHour} camQ={cam} setCamQ={setCam} width={panelW} height={panelH}/></div>
+        </div>
+        <div style={{background:"rgba(10,15,30,0.6)",borderRadius:"12px",border:"1px solid rgba(80,100,140,0.15)",padding:"12px"}}>
+          <div style={{...ls,marginBottom:"8px"}}>Horizon View — facing {facingSouth?"south":"north"}</div>
+          <div style={{aspectRatio:"1 / 0.85"}}><HorizonView doy={doy} latitude={latitude} solarHour={solarHour} width={panelW} height={panelH}/></div>
+        </div>
+      </div>
+
+      <InfoPanel doy={doy} latitude={latitude} solarHour={solarHour}/>
+
+      <div style={{marginTop:"16px",background:"rgba(10,15,30,0.6)",borderRadius:"12px",border:"1px solid rgba(80,100,140,0.15)",padding:"16px 18px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:"14px",marginBottom:"14px",flexWrap:"wrap"}}>
+          <button onClick={()=>setIsPlaying(!isPlaying)} style={{background:isPlaying?"rgba(255,80,80,0.2)":"rgba(100,181,246,0.2)",border:isPlaying?"1px solid rgba(255,80,80,0.4)":"1px solid rgba(100,181,246,0.4)",borderRadius:"8px",padding:"8px 20px",color:isPlaying?"#FF8A80":"#90CAF9",fontSize:"12px",fontFamily:"'DM Mono', monospace",fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:"8px",letterSpacing:"1px"}}>
+            {isPlaying?<><svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="4" height="10" fill="currentColor" rx="1"/><rect x="7" y="1" width="4" height="10" fill="currentColor" rx="1"/></svg>PAUSE</>:<><svg width="12" height="12" viewBox="0 0 12 12"><polygon points="2,0 12,6 2,12" fill="currentColor"/></svg>PLAY 24H</>}
+          </button>
+          <div style={{display:"flex",gap:"4px"}}>{speeds.map(s=><button key={s.v} onClick={()=>setSpeed(s.v)} style={{background:speed===s.v?"rgba(100,181,246,0.2)":"rgba(40,50,70,0.4)",border:speed===s.v?"1px solid rgba(100,181,246,0.35)":"1px solid rgba(80,100,140,0.15)",borderRadius:"5px",padding:"4px 10px",color:speed===s.v?"#90CAF9":"rgba(160,170,180,0.5)",fontSize:"10px",fontFamily:"'DM Mono', monospace",cursor:"pointer"}}>{s.l}</button>)}</div>
+          <div style={{flex:1,minWidth:"140px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}><span style={ls}>Time of Day</span><span style={{...vs,color:"#FFD54F",fontWeight:600}}>{formatTime(solarHour)}</span></div>
+            <input type="range" min={0} max={24} step={0.05} value={solarHour} onChange={e=>{setSolarHour(parseFloat(e.target.value));setIsPlaying(false);}} style={{width:"100%",accentColor:"#FFD54F",height:"4px",cursor:"pointer"}}/>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:"9px",color:"rgba(140,160,190,0.3)",fontFamily:"'DM Mono', monospace",marginTop:"2px"}}><span>12am</span><span>3am</span><span>6am</span><span>9am</span><span>12pm</span><span>3pm</span><span>6pm</span><span>9pm</span><span>12am</span></div>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:"14px",marginBottom:"14px",flexWrap:"wrap"}}>
+          <button onClick={()=>setIsPlayingYear(!isPlayingYear)} style={{background:isPlayingYear?"rgba(255,80,80,0.2)":"rgba(255,180,80,0.15)",border:isPlayingYear?"1px solid rgba(255,80,80,0.4)":"1px solid rgba(255,180,80,0.35)",borderRadius:"8px",padding:"8px 20px",color:isPlayingYear?"#FF8A80":"#FFB74D",fontSize:"12px",fontFamily:"'DM Mono', monospace",fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",gap:"8px",letterSpacing:"1px"}}>
+            {isPlayingYear?<><svg width="12" height="12" viewBox="0 0 12 12"><rect x="1" y="1" width="4" height="10" fill="currentColor" rx="1"/><rect x="7" y="1" width="4" height="10" fill="currentColor" rx="1"/></svg>PAUSE</>:<><svg width="12" height="12" viewBox="0 0 12 12"><polygon points="2,0 12,6 2,12" fill="currentColor"/></svg>PLAY YEAR</>}
+          </button>
+          <div style={{display:"flex",gap:"4px"}}>{[{l:"1×",v:1},{l:"2×",v:2},{l:"4×",v:4}].map(s=><button key={s.v} onClick={()=>setYearSpeed(s.v)} style={{background:yearSpeed===s.v?"rgba(255,180,80,0.2)":"rgba(40,50,70,0.4)",border:yearSpeed===s.v?"1px solid rgba(255,180,80,0.35)":"1px solid rgba(80,100,140,0.15)",borderRadius:"5px",padding:"4px 10px",color:yearSpeed===s.v?"#FFB74D":"rgba(160,170,180,0.5)",fontSize:"10px",fontFamily:"'DM Mono', monospace",cursor:"pointer"}}>{s.l}</button>)}</div>
+          <div style={{flex:1,minWidth:"140px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}><span style={ls}>Date</span><span style={{...vs,color:"#FFB74D",fontWeight:600}}>{MONTHS[month]} {day}</span></div>
+            <input type="range" min={1} max={366} value={Math.round(doy)} onChange={e=>{setDoy(parseInt(e.target.value));setIsPlayingYear(false);}} style={{width:"100%",accentColor:"#FFB74D",height:"4px",cursor:"pointer"}}/>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:"9px",color:"rgba(140,160,190,0.3)",fontFamily:"'DM Mono', monospace",marginTop:"2px"}}>{MONTHS.map(m=><span key={m}>{m}</span>)}</div>
+          </div>
+        </div>
+        <div style={{marginBottom:"12px"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"6px"}}><span style={ls}>Latitude</span><span style={vs}>{latitude.toFixed(1)}° {latitude>=0?"N":"S"}</span></div>
+          <input type="range" min={-90} max={90} step={0.5} value={latitude} onChange={e=>setLatitude(parseFloat(e.target.value))} style={{width:"100%",accentColor:"#64B5F6",height:"4px",cursor:"pointer"}}/>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:"9px",color:"rgba(140,160,190,0.3)",fontFamily:"'DM Mono', monospace",marginTop:"4px"}}><span>90°S</span><span>60°S</span><span>30°S</span><span>Equator</span><span>30°N</span><span>60°N</span><span>90°N</span></div>
+        </div>
+        <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>{presets.map(p=><button key={p.l} onClick={()=>setLatitude(p.v)} style={{background:Math.abs(latitude-p.v)<1?"rgba(100,181,246,0.2)":"rgba(40,50,70,0.5)",border:Math.abs(latitude-p.v)<1?"1px solid rgba(100,181,246,0.4)":"1px solid rgba(80,100,140,0.2)",borderRadius:"6px",padding:"5px 12px",color:Math.abs(latitude-p.v)<1?"#90CAF9":"rgba(180,190,200,0.6)",fontSize:"11px",fontFamily:"'DM Mono', monospace",cursor:"pointer"}}>{p.l}</button>)}</div>
+      </div>
+      <div style={{marginTop:"12px",fontSize:"10px",color:"rgba(140,160,190,0.3)",fontFamily:"'DM Mono', monospace",textAlign:"center",letterSpacing:"0.5px"}}>Times shown in solar time · Atmospheric refraction not included · Horizon view auto-faces toward noon sun</div>
+    </div>
+  );
+}
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(SolarVisualization));
+  </script>
+</body>
+</html>

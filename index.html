@@ -62,6 +62,12 @@ function sunriseHourAngle(lat,decl) { const c=-Math.tan(lat*DEG)*Math.tan(decl*D
 function solarPosition(lat,decl,ha) {
   const sA=Math.sin(lat*DEG)*Math.sin(decl*DEG)+Math.cos(lat*DEG)*Math.cos(decl*DEG)*Math.cos(ha*DEG);
   const alt=Math.asin(Math.max(-1,Math.min(1,sA)))*RAD;
+  // At the poles, cos(lat)→0 breaks the azimuth formula; use hour angle directly
+  if(Math.abs(lat)>89.5){
+    let az=lat>0?(180+ha)%360:(360-ha)%360;
+    if(az<0)az+=360;
+    return{altitude:alt,azimuth:az};
+  }
   const cAz=(Math.sin(decl*DEG)-Math.sin(lat*DEG)*sA)/(Math.cos(lat*DEG)*Math.cos(alt*DEG)+0.0001);
   let az=Math.acos(Math.max(-1,Math.min(1,cAz)))*RAD;
   if(ha>0)az=360-az; return{altitude:alt,azimuth:az};

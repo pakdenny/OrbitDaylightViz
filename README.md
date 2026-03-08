@@ -33,7 +33,7 @@ Both views update together in real time, so you can see *why* the sun behaves th
 
 Just open `index.html` in any modern web browser. No installation or build step needed.
 
-Or visit the live version: `https://YOUR_USERNAME.github.io/solar-path-explorer/`
+Or visit the live version: `https://pakdenny.github.io/solar-path-explorer/`
 
 ## Technical notes
 

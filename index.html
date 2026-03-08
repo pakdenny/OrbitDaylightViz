@@ -732,7 +732,7 @@ function DrumPicker({value, onChange, onDragStart, min, max, step, labels, accen
 
 function AnnualRibbon({latitude,doy,width}) {
   const canvasRef=useRef(null);
-  const ribbonH=55, totalH=ribbonH*3+65;
+  const ribbonH=110, totalH=ribbonH*3+80;
 
   const draw=useCallback(()=>{
     const canvas=canvasRef.current;if(!canvas)return;
@@ -752,7 +752,7 @@ function AnnualRibbon({latitude,doy,width}) {
     modes.forEach((mode,mi)=>{
       const yOff=mi*(ribbonH+10)+30;
       // Label
-      ctx.font="bold 10px 'DM Mono', monospace";ctx.fillStyle=mode.color+"0.7)";ctx.textAlign="left";
+      ctx.font="bold 10px 'DM Mono', monospace";ctx.fillStyle=mode.color+"0.9)";ctx.textAlign="left";
       ctx.fillText(mode.label,margin,yOff-5);
 
       // Background (night)
@@ -794,7 +794,7 @@ function AnnualRibbon({latitude,doy,width}) {
       // Waking hours boundary lines (7am, 10pm)
       [7,22].forEach(h=>{
         const y=yOff+(h-tMin)/tRange*ribbonH;
-        ctx.strokeStyle="rgba(100,200,255,0.35)";ctx.lineWidth=1;ctx.setLineDash([3,3]);
+        ctx.strokeStyle="rgba(255,255,255,0.9)";ctx.lineWidth=1.5;ctx.setLineDash([4,3]);
         ctx.beginPath();ctx.moveTo(margin,y);ctx.lineTo(margin+plotW,y);ctx.stroke();ctx.setLineDash([]);
       });
 
@@ -831,21 +831,24 @@ function AnnualRibbon({latitude,doy,width}) {
 
       // Current day marker
       const dx=margin+(Math.round(doy)-1)/364*plotW;
-      ctx.strokeStyle="rgba(255,255,255,0.4)";ctx.lineWidth=1;
+      ctx.strokeStyle="rgba(255,255,255,0.7)";ctx.lineWidth=1.5;
       ctx.beginPath();ctx.moveTo(dx,yOff);ctx.lineTo(dx,yOff+ribbonH);ctx.stroke();
 
       // Time axis labels on right
-      ctx.font="8px 'DM Mono', monospace";ctx.fillStyle="rgba(140,160,190,0.4)";ctx.textAlign="left";
+      ctx.textAlign="left";
       [4,7,10,13,16,19,22].forEach(h=>{
         const y=yOff+(h-tMin)/tRange*ribbonH;
         const hh=h>12?h-12:h===0?12:h;const ap=h>=12?"p":"a";
-        ctx.fillText(`${hh}${ap}`,margin+plotW+4,y+3);
+        const isBound=(h===7||h===22);
+        ctx.font=isBound?"bold 10px 'DM Mono', monospace":"9px 'DM Mono', monospace";
+        ctx.fillStyle=isBound?"rgba(255,255,255,0.95)":"rgba(255,255,255,0.7)";
+        ctx.fillText(`${hh}${ap}`,margin+plotW+4,y+4);
       });
     });
 
     // Month labels at bottom
-    const lastY=2*(ribbonH+10)+30+ribbonH+8;
-    ctx.font="8px 'DM Mono', monospace";ctx.fillStyle="rgba(140,160,190,0.35)";ctx.textAlign="center";
+    const lastY=2*(ribbonH+10)+30+ribbonH+10;
+    ctx.font="bold 9px 'DM Mono', monospace";ctx.fillStyle="rgba(255,255,255,0.8)";ctx.textAlign="center";
     MONTHS.forEach((m,i)=>{
       const doyM=[1,32,61,92,122,153,183,214,245,275,306,336][i];
       const x=margin+(doyM-1)/364*plotW;
@@ -853,12 +856,12 @@ function AnnualRibbon({latitude,doy,width}) {
     });
 
     // Legend
-    ctx.font="8px 'DM Mono', monospace";ctx.textAlign="left";
+    ctx.font="9px 'DM Mono', monospace";ctx.textAlign="left";
     const ly=lastY+14;
-    ctx.fillStyle="rgba(255,230,100,0.6)";ctx.fillRect(margin,ly-4,8,8);
-    ctx.fillStyle="rgba(140,160,190,0.4)";ctx.fillText("Daylight during waking hours (7am–10pm)",margin+12,ly+3);
-    ctx.fillStyle="rgba(255,220,80,0.35)";ctx.fillRect(margin+240,ly-4,8,8);
-    ctx.fillStyle="rgba(140,160,190,0.4)";ctx.fillText("Daylight outside waking hours",margin+252,ly+3);
+    ctx.fillStyle="rgba(255,230,100,0.8)";ctx.fillRect(margin,ly-4,8,8);
+    ctx.fillStyle="rgba(255,255,255,0.7)";ctx.fillText("Daylight during waking hours (7am–10pm)",margin+12,ly+3);
+    ctx.fillStyle="rgba(255,220,80,0.5)";ctx.fillRect(margin+260,ly-4,8,8);
+    ctx.fillStyle="rgba(255,255,255,0.7)";ctx.fillText("Daylight outside waking hours",margin+272,ly+3);
 
   },[latitude,doy,width]);
 

@@ -62,7 +62,13 @@ function sunriseHourAngle(lat,decl) { const c=-Math.tan(lat*DEG)*Math.tan(decl*D
 function solarPosition(lat,decl,ha) {
   const sA=Math.sin(lat*DEG)*Math.sin(decl*DEG)+Math.cos(lat*DEG)*Math.cos(decl*DEG)*Math.cos(ha*DEG);
   const alt=Math.asin(Math.max(-1,Math.min(1,sA)))*RAD;
-  // At the poles, cos(lat)→0 breaks the azimuth formula; use hour angle directly
+  // At the exact poles, azimuth is undefined — sun circles at constant altitude
+  // Display as a fixed point due south at the declination altitude
+  if(Math.abs(lat)>=90){
+    const poleAlt=lat>0?decl:-decl;
+    return{altitude:poleAlt,azimuth:180};
+  }
+  // Near poles, derive azimuth from hour angle to avoid cos(lat)→0 singularity
   if(Math.abs(lat)>89.5){
     let az=lat>0?(180+ha)%360:(360-ha)%360;
     if(az<0)az+=360;
@@ -73,6 +79,14 @@ function solarPosition(lat,decl,ha) {
   if(ha>0)az=360-az; return{altitude:alt,azimuth:az};
 }
 function formatTime(sh) { let h=Math.floor(sh)%24; if(h<0)h+=24; const m=Math.floor((sh-Math.floor(sh))*60); return `${h===0?12:h>12?h-12:h}:${m.toString().padStart(2,"0")} ${h>=12?"PM":"AM"}`; }
+
+// DST offset: 0=standard, 1=clocks spring forward
+function getDSTOffset(mode, doy) {
+  if (mode === "standard") return 0;
+  if (mode === "dst") return 1;
+  // "switch": US DST approx March 10 (doy~70) to Nov 3 (doy~308)
+  return (doy >= 70 && doy < 308) ? 1 : 0;
+}
 
 const CONTINENTS = [
   {color:"#3B8C4A",pts:[[60,-130],[65,-120],[70,-100],[70,-80],[65,-60],[50,-55],[45,-65],[40,-75],[30,-82],[25,-90],[28,-105],[32,-115],[40,-125],[50,-130]]},
@@ -193,7 +207,7 @@ function OrbitalView({ doy, latitude, solarHour, camQ, setCamQ, width, height })
       ctx.strokeStyle="rgba(255,220,100,0.05)";ctx.lineWidth=25;
       ctx.beginPath();ctx.moveTo(sunP.x,sunP.y);ctx.lineTo(eP.x,eP.y);ctx.stroke();
 
-      const earthR=Math.min(width,height)*0.140625;
+      const earthR=Math.min(width,height)*0.176;
       const eOff=document.createElement("canvas");
       eOff.width=earthR*2+4;eOff.height=earthR*2+4;
       const ec=eOff.getContext("2d");
@@ -220,6 +234,47 @@ function OrbitalView({ doy, latitude, solarHour, camQ, setCamQ, width, height })
 
       // Continents
       CONTINENTS.forEach(c=>{const pr=c.pts.map(([la,lo])=>projE(geoTo3D(la,lo)));if(pr.filter(p=>p.z>0).length===0)return;ec.fillStyle=c.color;ec.beginPath();let s=false;pr.forEach(p=>{if(p.z>-0.05){if(!s){ec.moveTo(p.x,p.y);s=true;}else ec.lineTo(p.x,p.y);}else{const l=Math.sqrt((p.x-ecx)**2+(p.y-ecy)**2)||1;if(!s){ec.moveTo(ecx+(p.x-ecx)/l*R*0.9,ecy+(p.y-ecy)/l*R*0.9);s=true;}else ec.lineTo(ecx+(p.x-ecx)/l*R*0.9,ecy+(p.y-ecy)/l*R*0.9);}});ec.closePath();ec.fill();});
+
+      // Longitude lines (12 great circles = 24 meridians, every 15°)
+      ec.strokeStyle="rgba(255,255,255,0.18)";ec.lineWidth=2;
+      for(let lon=0;lon<180;lon+=15){
+        ec.beginPath();let started=false;
+        for(let lat=-90;lat<=90;lat+=3){
+          const p=projE(geoTo3D(lat,lon));
+          if(p.z>0){if(!started){ec.moveTo(p.x,p.y);started=true;}else ec.lineTo(p.x,p.y);}
+          else started=false;
+        }
+        ec.stroke();
+        ec.beginPath();started=false;
+        for(let lat=-90;lat<=90;lat+=3){
+          const p=projE(geoTo3D(lat,lon+180));
+          if(p.z>0){if(!started){ec.moveTo(p.x,p.y);started=true;}else ec.lineTo(p.x,p.y);}
+          else started=false;
+        }
+        ec.stroke();
+      }
+
+      // Equator line
+      ec.strokeStyle="rgba(255,255,255,0.18)";ec.lineWidth=2;
+      ec.beginPath();let eqStarted=false;
+      for(let lon=0;lon<=362;lon+=3){
+        const p=projE(geoTo3D(0,lon));
+        if(p.z>0){if(!eqStarted){ec.moveTo(p.x,p.y);eqStarted=true;}else ec.lineTo(p.x,p.y);}
+        else eqStarted=false;
+      }
+      ec.stroke();
+
+      // Tropics and Arctic/Antarctic circles
+      [23.44,-23.44,66.56,-66.56].forEach(latLine=>{
+        ec.strokeStyle="rgba(255,255,255,0.12)";ec.lineWidth=1.5;ec.setLineDash([4,4]);
+        ec.beginPath();let ls=false;
+        for(let lon=0;lon<=362;lon+=3){
+          const p=projE(geoTo3D(latLine,lon));
+          if(p.z>0){if(!ls){ec.moveTo(p.x,p.y);ls=true;}else ec.lineTo(p.x,p.y);}
+          else ls=false;
+        }
+        ec.stroke();ec.setLineDash([]);
+      });
 
       // Poles
       [90,-90].forEach(pl=>{const p=projE(geoTo3D(pl,0));if(p.z>0){ec.fillStyle="rgba(220,235,245,0.4)";ec.beginPath();ec.arc(p.x,p.y,R*(pl>0?0.12:0.15),0,Math.PI*2);ec.fill();}});
@@ -395,7 +450,7 @@ function OrbitalView({ doy, latitude, solarHour, camQ, setCamQ, width, height })
 
 // ─── HORIZON VIEW ───────────────────────────────────────────────────────────
 
-function HorizonView({doy,latitude,solarHour,width,height}) {
+function HorizonView({doy,latitude,solarHour,clockOffset,width,height}) {
   const canvasRef=useRef(null);
   const draw=useCallback(()=>{
     const canvas=canvasRef.current;if(!canvas)return;
@@ -404,10 +459,12 @@ function HorizonView({doy,latitude,solarHour,width,height}) {
     const isPD=Math.abs(latitude+decl)>=90&&latitude*decl>0;
     const isPN=Math.abs(latitude-decl)>=90&&latitude*decl<0;
     const hY=height*0.68,sT=10;
-    // Face toward the noon sun so the arc is always continuous across the view
     const noonSun=solarPosition(latitude,decl,0);
     const south=noonSun.azimuth>90&&noonSun.azimuth<270;
     const curHA=(solarHour-12)*15,curSun=solarPosition(latitude,decl,curHA),sunUp=curSun.altitude>0;
+    const co=clockOffset||0;
+    // Waking hours in solar time: clock 7am-10pm → solar (7-co) to (22-co)
+    const wakeStartSolar=7-co, wakeEndSolar=22-co;
     ctx.clearRect(0,0,width,height);
 
     // Sky
@@ -419,22 +476,17 @@ function HorizonView({doy,latitude,solarHour,width,height}) {
     else{sg.addColorStop(0,"#1a4a8a");sg.addColorStop(0.5,"#2a6aaa");sg.addColorStop(1,"#4a8aba");}
     ctx.fillStyle=sg;ctx.fillRect(0,sT,width,hY-sT);
 
-    // Stars at night
     if(curSun.altitude<-6){const sa=Math.min(1,(-curSun.altitude-6)/12)*0.7;for(let i=0;i<50;i++){ctx.fillStyle=`rgba(200,210,230,${sa*(0.3+(i%4)*0.2)})`;ctx.beginPath();ctx.arc(((37*(i+1)*7919)%(width-20))+10,((37*(i+1)*4271)%(hY-sT-20))+sT+10,0.5+(i%3)*0.3,0,Math.PI*2);ctx.fill();}}
 
-    // Horizon glow
     if(Math.abs(curSun.altitude)<10&&!isPN){const gi=Math.max(0,1-Math.abs(curSun.altitude)/10)*0.25;const hx=azToX(curSun.azimuth,width,south);const hg=ctx.createRadialGradient(hx,hY,0,hx,hY,width*0.4);hg.addColorStop(0,`rgba(255,160,60,${gi})`);hg.addColorStop(0.5,`rgba(255,120,40,${gi*0.3})`);hg.addColorStop(1,"rgba(255,100,30,0)");ctx.fillStyle=hg;ctx.fillRect(0,sT,width,hY-sT);}
 
-    // Ground
     const gG=ctx.createLinearGradient(0,hY,0,height);gG.addColorStop(0,sunUp?"#1e3520":"#101a10");gG.addColorStop(1,sunUp?"#0e1a0e":"#060e06");
     ctx.fillStyle=gG;ctx.fillRect(0,hY,width,height-hY);
     ctx.strokeStyle=sunUp?"rgba(180,160,100,0.2)":"rgba(100,110,130,0.15)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,hY);ctx.lineTo(width,hY);ctx.stroke();
 
-    // Cardinals
     ctx.font="bold 11px 'DM Mono', monospace";ctx.textAlign="center";
     [{l:"N",a:0},{l:"NE",a:45},{l:"E",a:90},{l:"SE",a:135},{l:"S",a:180},{l:"SW",a:225},{l:"W",a:270},{l:"NW",a:315}].forEach(c=>{const x=azToX(c.a,width,south);if(x>=0&&x<=width){ctx.fillStyle=c.l.length===1?"rgba(180,190,200,0.6)":"rgba(180,190,200,0.3)";ctx.fillText(c.l,x,hY+18);ctx.strokeStyle="rgba(180,190,200,0.08)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x,sT);ctx.lineTo(x,hY);ctx.stroke();}});
 
-    // Alt grid
     ctx.font="9px 'DM Mono', monospace";ctx.textAlign="left";
     for(let a=15;a<=90;a+=15){const y=altToY(a,hY,sT);ctx.strokeStyle="rgba(180,190,200,0.05)";ctx.fillStyle="rgba(180,190,200,0.2)";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke();ctx.fillText(`${a}°`,6,y-3);}
 
@@ -444,30 +496,54 @@ function HorizonView({doy,latitude,solarHour,width,height}) {
     const pp=[];for(let ha=stHA;ha<=enHA;ha+=0.5){const pos=solarPosition(latitude,decl,ha);if(pos.altitude>=-2)pp.push({x:azToX(pos.azimuth,width,south),y:altToY(Math.max(0,pos.altitude),hY,sT),ha});}
 
     if(pp.length>1){
-      // Full path
-      ctx.strokeStyle="rgba(255,200,80,0.18)";ctx.lineWidth=1.5;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(pp[0].x,pp[0].y);
+      // Sun path: color by waking/sleeping hours
+      // Dim path (full arc, sleeping hours color)
+      ctx.strokeStyle="rgba(120,120,180,0.15)";ctx.lineWidth=1.5;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(pp[0].x,pp[0].y);
       for(let i=1;i<pp.length;i++){if(Math.abs(pp[i].x-pp[i-1].x)<width*0.5)ctx.lineTo(pp[i].x,pp[i].y);else ctx.moveTo(pp[i].x,pp[i].y);}ctx.stroke();ctx.setLineDash([]);
 
-      // Traversed
-      if(curHA>=stHA&&curHA<=enHA){const tv=pp.filter(p=>p.ha<=curHA);if(tv.length>1){ctx.strokeStyle="rgba(255,200,80,0.5)";ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(tv[0].x,tv[0].y);for(let i=1;i<tv.length;i++){if(Math.abs(tv[i].x-tv[i-1].x)<width*0.5)ctx.lineTo(tv[i].x,tv[i].y);else ctx.moveTo(tv[i].x,tv[i].y);}ctx.stroke();}}
+      // Bright overlay for waking hours portion
+      const wakePts=pp.filter(p=>{const solarH=12+p.ha/15;return solarH>=wakeStartSolar&&solarH<=wakeEndSolar;});
+      if(wakePts.length>1){
+        ctx.strokeStyle="rgba(255,200,80,0.35)";ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(wakePts[0].x,wakePts[0].y);
+        for(let i=1;i<wakePts.length;i++){if(Math.abs(wakePts[i].x-wakePts[i-1].x)<width*0.5)ctx.lineTo(wakePts[i].x,wakePts[i].y);else ctx.moveTo(wakePts[i].x,wakePts[i].y);}ctx.stroke();
+      }
 
-      // Hour markers
-      for(let ha=Math.ceil(stHA/15)*15;ha<=enHA;ha+=15){const pos=solarPosition(latitude,decl,ha);if(pos.altitude>=0){const x=azToX(pos.azimuth,width,south),y=altToY(pos.altitude,hY,sT);const hh=Math.floor(12+ha/15),ampm=hh>=12?"pm":"am",h12=hh===0?12:hh>12?hh-12:hh;ctx.fillStyle="rgba(255,220,120,0.4)";ctx.beginPath();ctx.arc(x,y,2.5,0,Math.PI*2);ctx.fill();ctx.font="9px 'DM Mono', monospace";ctx.fillStyle="rgba(255,220,120,0.35)";ctx.textAlign="center";ctx.fillText(`${h12}${ampm}`,x,y-7);}}
+      // Traversed portion
+      if(curHA>=stHA&&curHA<=enHA){const tv=pp.filter(p=>p.ha<=curHA);if(tv.length>1){ctx.strokeStyle="rgba(255,200,80,0.55)";ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(tv[0].x,tv[0].y);for(let i=1;i<tv.length;i++){if(Math.abs(tv[i].x-tv[i-1].x)<width*0.5)ctx.lineTo(tv[i].x,tv[i].y);else ctx.moveTo(tv[i].x,tv[i].y);}ctx.stroke();}}
 
-      // Rise/set
-      if(!isPD){[{ha:-srHA,l:"RISE"},{ha:srHA,l:"SET"}].forEach(s=>{const pos=solarPosition(latitude,decl,s.ha);const x=azToX(pos.azimuth,width,south);ctx.fillStyle="rgba(255,160,60,0.6)";ctx.beginPath();ctx.arc(x,hY,4,0,Math.PI*2);ctx.fill();ctx.font="bold 9px 'DM Mono', monospace";ctx.fillStyle="rgba(255,180,80,0.7)";ctx.textAlign="center";ctx.fillText(s.l,x,hY-9);ctx.font="9px 'DM Mono', monospace";ctx.fillStyle="rgba(255,180,80,0.4)";ctx.fillText(`${Math.round(pos.azimuth)}°`,x,hY+30);});}
+      // Hour markers (in clock time)
+      for(let ha=Math.ceil(stHA/15)*15;ha<=enHA;ha+=15){const pos=solarPosition(latitude,decl,ha);if(pos.altitude>=0){const x=azToX(pos.azimuth,width,south),y=altToY(pos.altitude,hY,sT);const clockH=12+ha/15+co;const hh=((Math.floor(clockH)%24)+24)%24;const ampm=hh>=12?"pm":"am";const h12=hh===0?12:hh>12?hh-12:hh;const solarH=12+ha/15;const inWake=solarH>=wakeStartSolar&&solarH<=wakeEndSolar;ctx.fillStyle=inWake?"rgba(255,220,120,0.5)":"rgba(120,120,180,0.35)";ctx.beginPath();ctx.arc(x,y,2.5,0,Math.PI*2);ctx.fill();ctx.font="9px 'DM Mono', monospace";ctx.fillStyle=inWake?"rgba(255,220,120,0.45)":"rgba(120,120,180,0.3)";ctx.textAlign="center";ctx.fillText(`${h12}${ampm}`,x,y-7);}}
+
+      // Waking boundary markers (7am and 10pm clock time)
+      [7,22].forEach(clockH=>{
+        const solarH=clockH-co;
+        const ha=(solarH-12)*15;
+        if(ha>=stHA&&ha<=enHA){
+          const pos=solarPosition(latitude,decl,ha);
+          if(pos.altitude>=-2){
+            const x=azToX(pos.azimuth,width,south),y=altToY(Math.max(0,pos.altitude),hY,sT);
+            ctx.fillStyle="rgba(100,200,255,0.6)";ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill();
+            ctx.font="bold 8px 'DM Mono', monospace";ctx.fillStyle="rgba(100,200,255,0.7)";ctx.textAlign="center";
+            ctx.fillText(clockH===7?"7am":"10pm",x,y-8);
+          }
+        }
+      });
+
+      if(!isPD){[{ha:-srHA,l:"RISE"},{ha:srHA,l:"SET"}].forEach(s=>{const pos=solarPosition(latitude,decl,s.ha);const x=azToX(pos.azimuth,width,south);ctx.fillStyle="rgba(255,160,60,0.6)";ctx.beginPath();ctx.arc(x,hY,4,0,Math.PI*2);ctx.fill();ctx.font="bold 9px 'DM Mono', monospace";ctx.fillStyle="rgba(255,180,80,0.7)";ctx.textAlign="center";ctx.fillText(s.l,x,hY-9);
+        // Show clock time for rise/set
+        const riseSetClockH=12+s.ha/15+co;ctx.font="9px 'DM Mono', monospace";ctx.fillStyle="rgba(255,180,80,0.4)";ctx.fillText(formatTime(riseSetClockH),x,hY+30);});}
     }
 
-    // Animated sun
+    // Animated sun (show clock time)
     if(curSun.altitude>-4){const sx=azToX(curSun.azimuth,width,south),sy=altToY(Math.max(-2,curSun.altitude),hY,sT),vis=Math.min(1,(curSun.altitude+4)/6);
       if(curSun.altitude>0){const gr=ctx.createRadialGradient(sx,sy,0,sx,sy,40);gr.addColorStop(0,`rgba(255,240,150,${0.7*vis})`);gr.addColorStop(0.3,`rgba(255,200,80,${0.2*vis})`);gr.addColorStop(1,"rgba(255,180,50,0)");ctx.fillStyle=gr;ctx.beginPath();ctx.arc(sx,sy,40,0,Math.PI*2);ctx.fill();}
       const bR=curSun.altitude>0?10:10*vis,g=curSun.altitude<5?(160+curSun.altitude*12)|0:220,b=curSun.altitude<5?(50+curSun.altitude*10)|0:100;
       const sb=ctx.createRadialGradient(sx,sy,0,sx,sy,bR);sb.addColorStop(0,`rgba(255,255,240,${vis})`);sb.addColorStop(0.5,`rgba(255,${g},${b},${vis})`);sb.addColorStop(1,`rgba(255,${Math.max(100,g-40)},${Math.max(0,b-30)},${vis*0.8})`);
       ctx.fillStyle=sb;ctx.beginPath();ctx.arc(sx,sy,bR,0,Math.PI*2);ctx.fill();
-      ctx.font="bold 10px 'DM Mono', monospace";ctx.fillStyle=`rgba(255,220,120,${vis*0.9})`;ctx.textAlign="center";ctx.fillText(formatTime(solarHour),sx,sy-bR-6);
-    }else{ctx.font="11px 'DM Mono', monospace";ctx.fillStyle="rgba(140,160,190,0.5)";ctx.textAlign="center";ctx.fillText(`${formatTime(solarHour)} — sun below horizon`,width/2,height-14);}
+      ctx.font="bold 10px 'DM Mono', monospace";ctx.fillStyle=`rgba(255,220,120,${vis*0.9})`;ctx.textAlign="center";ctx.fillText(formatTime(solarHour+co),sx,sy-bR-6);
+    }else{ctx.font="11px 'DM Mono', monospace";ctx.fillStyle="rgba(140,160,190,0.5)";ctx.textAlign="center";ctx.fillText(`${formatTime(solarHour+co)} — sun below horizon`,width/2,height-14);}
     if(isPD){ctx.font="11px 'DM Sans', sans-serif";ctx.fillStyle="rgba(255,220,150,0.4)";ctx.textAlign="center";ctx.fillText("Midnight Sun — 24h daylight",width/2,height-14);}
-  },[doy,latitude,solarHour,width,height]);
+  },[doy,latitude,solarHour,clockOffset,width,height]);
   useEffect(()=>{draw();},[draw]);
   return (<canvas ref={canvasRef} width={width} height={height} style={{width:"100%",height:"100%"}} />);
 }
@@ -482,21 +558,312 @@ function altToY(a,hY,sT){return hY-(a/90)*(hY-sT);}
 
 // ─── INFO PANEL ─────────────────────────────────────────────────────────────
 
-function InfoPanel({doy,latitude,solarHour}){
+function InfoPanel({doy,latitude,solarHour,clockOffset}){
+  const co=clockOffset||0;
   const decl=solarDeclination(doy),ha=sunriseHourAngle(latitude,decl);
   const{month,day}=monthDayFromDOY(doy);const isPD=ha>=180,isPN=ha<=0;
   let dL,sr,ss;
   if(isPD){dL="24:00";sr="—";ss="—";}else if(isPN){dL="0:00";sr="—";ss="—";}
-  else{const h=(2*ha)/15;dL=`${Math.floor(h)}h ${Math.round((h-Math.floor(h))*60).toString().padStart(2,"0")}m`;sr=formatTime(12-ha/15);ss=formatTime(12+ha/15);}
+  else{const h=(2*ha)/15;dL=`${Math.floor(h)}h ${Math.round((h-Math.floor(h))*60).toString().padStart(2,"0")}m`;sr=formatTime(12-ha/15+co);ss=formatTime(12+ha/15+co);}
   const nA=90-Math.abs(latitude-decl),cS=solarPosition(latitude,decl,(solarHour-12)*15);
+  const modeLabel=co===0?"STD":"DST";
   return(
     <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:"10px",padding:"14px 16px",background:"rgba(15,20,35,0.8)",borderRadius:"8px",border:"1px solid rgba(80,100,140,0.2)"}}>
-      {[{l:"Current Time",v:formatTime(solarHour),h:true},{l:"Sun Altitude",v:`${cS.altitude.toFixed(1)}°`},{l:"Sunrise",v:sr},{l:"Sunset",v:ss},{l:"Day Length",v:dL},{l:"Noon Alt.",v:`${nA.toFixed(1)}°`},{l:"Declination",v:`${decl>=0?"+":""}${decl.toFixed(1)}°`},{l:"Date",v:`${MONTHS[month]} ${day}`}].map((item,i)=>(
+      {[{l:"Clock Time",v:formatTime(solarHour+co),h:true},{l:"Sun Altitude",v:`${cS.altitude.toFixed(1)}°`},{l:`Sunrise (${modeLabel})`,v:sr},{l:`Sunset (${modeLabel})`,v:ss},{l:"Day Length",v:dL},{l:"Noon Alt.",v:`${nA.toFixed(1)}°`},{l:"Declination",v:`${decl>=0?"+":""}${decl.toFixed(1)}°`},{l:"Date",v:`${MONTHS[month]} ${day}`}].map((item,i)=>(
         <div key={i} style={{textAlign:"center"}}>
           <div style={{fontSize:"9px",textTransform:"uppercase",letterSpacing:"1.2px",color:"rgba(140,160,190,0.55)",marginBottom:"3px",fontFamily:"'DM Mono', monospace"}}>{item.l}</div>
           <div style={{fontSize:"14px",color:item.h?"#FFD54F":"#C8D6E5",fontFamily:"'DM Mono', monospace",fontWeight:item.h?600:500}}>{item.v}</div>
         </div>))}
     </div>);
+}
+
+// ─── DRUM PICKER (wrapping cylinder) ────────────────────────────────────────
+
+function DrumPicker({value, onChange, onDragStart, min, max, step, labels, accentColor, height: drumH, visibleFraction, bgColorFn}) {
+  const canvasRef = useRef(null);
+  const dragging = useRef(false);
+  const lastX = useRef(0);
+  const h = drumH || 32;
+  const range = max - min;
+  const vFrac = visibleFraction || 0.5;
+
+  const draw = useCallback((w) => {
+    const canvas = canvasRef.current; if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, w, h);
+
+    const pixPerUnit = w / (range * vFrac);
+    const centerX = w / 2;
+
+    // Background: seasonal colors if bgColorFn provided, else solid
+    if (bgColorFn) {
+      // Paint per-pixel vertical stripes with seasonal color
+      const halfVisible = range * vFrac / 2;
+      for (let px = 0; px < w; px++) {
+        let v = value + (px - centerX) / pixPerUnit;
+        while (v > max) v -= range;
+        while (v < min) v += range;
+        const col = bgColorFn(v);
+        ctx.fillStyle = col;
+        ctx.fillRect(px, 0, 1, h);
+      }
+      // Cylinder shading overlay on top of colors
+      const cylTop = ctx.createLinearGradient(0, 0, 0, h);
+      cylTop.addColorStop(0, "rgba(0,0,0,0.35)");
+      cylTop.addColorStop(0.3, "rgba(0,0,0,0.15)");
+      cylTop.addColorStop(0.5, "rgba(0,0,0,0.08)");
+      cylTop.addColorStop(0.7, "rgba(0,0,0,0.15)");
+      cylTop.addColorStop(1, "rgba(0,0,0,0.35)");
+      ctx.fillStyle = cylTop;
+      ctx.fillRect(0, 0, w, h);
+    } else {
+      const bg = ctx.createLinearGradient(0, 0, 0, h);
+      bg.addColorStop(0, "rgba(200,200,200,1)");
+      bg.addColorStop(0.3, "rgba(240,240,240,1)");
+      bg.addColorStop(0.5, "rgba(255,255,255,1)");
+      bg.addColorStop(0.7, "rgba(240,240,240,1)");
+      bg.addColorStop(1, "rgba(200,200,200,1)");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+    }
+
+    // Draw labels/ticks centered on current value
+    if (labels) {
+      labels.forEach(lb => {
+        let offset = lb.at - value;
+        // Wrap
+        if (offset > range / 2) offset -= range;
+        if (offset < -range / 2) offset += range;
+        const x = centerX + offset * pixPerUnit;
+        if (x < -60 || x > w + 60) return;
+
+        const lc = lb.textColor || accentColor || "0,0,0";
+
+        // Tick
+        ctx.strokeStyle = `rgba(${lc},0.5)`;
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, h * 0.7); ctx.lineTo(x, h); ctx.stroke();
+
+        // Label
+        ctx.font = lb.bold ? "bold 11px 'DM Mono', monospace" : "10px 'DM Mono', monospace";
+        ctx.fillStyle = `rgba(${lc},${lb.bold ? 0.95 : 0.75})`;
+        ctx.textAlign = "center";
+        ctx.fillText(lb.text, x, h * 0.5);
+      });
+    } else {
+      // Generic ticks
+      const tickStep = step * Math.ceil(range / 50 / step);
+      for (let v = min; v <= max; v += tickStep) {
+        let offset = v - value;
+        if (offset > range / 2) offset -= range;
+        if (offset < -range / 2) offset += range;
+        const x = centerX + offset * pixPerUnit;
+        if (x < -20 || x > w + 20) return;
+        ctx.strokeStyle = `rgba(${accentColor || "0,0,0"},0.4)`;
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, h * 0.6); ctx.lineTo(x, h); ctx.stroke();
+      }
+    }
+
+    // Center indicator line
+    ctx.strokeStyle = "rgba(255,255,255,0.8)";
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(centerX, 0); ctx.lineTo(centerX, h); ctx.stroke();
+    ctx.strokeStyle = "rgba(0,0,0,0.85)";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(centerX, 0); ctx.lineTo(centerX, h); ctx.stroke();
+
+    // Subtle shadow at center
+    const glow = ctx.createRadialGradient(centerX, h / 2, 0, centerX, h / 2, 20);
+    glow.addColorStop(0, "rgba(0,0,0,0.08)");
+    glow.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = glow; ctx.fillRect(centerX - 20, 0, 40, h);
+
+  }, [value, min, max, range, step, accentColor, h, visibleFraction, vFrac, labels, bgColorFn]);
+
+  const containerRef = useRef(null);
+  const [w, setW] = useState(300);
+
+  useEffect(() => {
+    const el = containerRef.current; if (!el) return;
+    const obs = new ResizeObserver(e => { setW(Math.floor(e[0].contentRect.width)); });
+    obs.observe(el); return () => obs.disconnect();
+  }, []);
+
+  useEffect(() => { draw(w); }, [draw, w]);
+
+  const handleDown = useCallback((cx) => {
+    dragging.current = true; lastX.current = cx;
+    if (onDragStart) onDragStart();
+  }, [onDragStart]);
+
+  const handleMove = useCallback((cx) => {
+    if (!dragging.current) return;
+    const dx = cx - lastX.current;
+    lastX.current = cx;
+    const pixPerUnit = w / (range * vFrac);
+    const dv = -dx / pixPerUnit;
+    onChange(prev => {
+      let n = prev + dv;
+      while (n > max) n -= range;
+      while (n < min) n += range;
+      return n;
+    });
+  }, [w, range, min, max, onChange]);
+
+  const handleUp = useCallback(() => { dragging.current = false; }, []);
+
+  return (
+    <div ref={containerRef} style={{width:"100%",borderRadius:"6px",overflow:"hidden",border:"1px solid rgba(80,100,140,0.15)",cursor:"ew-resize"}}>
+      <canvas ref={canvasRef} width={w} height={h}
+        style={{width:"100%",height:h,display:"block"}}
+        onMouseDown={e=>handleDown(e.clientX)}
+        onMouseMove={e=>handleMove(e.clientX)}
+        onMouseUp={handleUp} onMouseLeave={handleUp}
+        onTouchStart={e=>handleDown(e.touches[0].clientX)}
+        onTouchMove={e=>handleMove(e.touches[0].clientX)}
+        onTouchEnd={handleUp}
+      />
+    </div>
+  );
+}
+
+// ─── ANNUAL RIBBON ──────────────────────────────────────────────────────────
+
+function AnnualRibbon({latitude,doy,width}) {
+  const canvasRef=useRef(null);
+  const ribbonH=55, totalH=ribbonH*3+65;
+
+  const draw=useCallback(()=>{
+    const canvas=canvasRef.current;if(!canvas)return;
+    const ctx=canvas.getContext("2d");
+    ctx.clearRect(0,0,width,totalH);
+    const margin=40;
+    const plotW=width-margin*2;
+    // Time range: 3am to 11pm (clock hours 3-23)
+    const tMin=3,tMax=23,tRange=tMax-tMin;
+
+    const modes=[
+      {label:"Permanent Standard Time",offset:()=>0,color:"rgba(100,180,255,"},
+      {label:"Current System (Switch)",offset:(d)=>(d>=70&&d<308)?1:0,color:"rgba(180,140,255,"},
+      {label:"Permanent Daylight Saving",offset:()=>1,color:"rgba(255,180,80,"},
+    ];
+
+    modes.forEach((mode,mi)=>{
+      const yOff=mi*(ribbonH+10)+30;
+      // Label
+      ctx.font="bold 10px 'DM Mono', monospace";ctx.fillStyle=mode.color+"0.7)";ctx.textAlign="left";
+      ctx.fillText(mode.label,margin,yOff-5);
+
+      // Background (night)
+      ctx.fillStyle="rgba(8,12,25,0.8)";
+      ctx.fillRect(margin,yOff,plotW,ribbonH);
+
+      // Draw each day as a vertical stripe
+      for(let d=1;d<=365;d++){
+        const x=margin+(d-1)/364*plotW;
+        const decl=solarDeclination(d);
+        const srHA=sunriseHourAngle(latitude,decl);
+        const isPD=Math.abs(latitude+decl)>=90&&latitude*decl>0;
+        const isPN=Math.abs(latitude-decl)>=90&&latitude*decl<0;
+        const co=mode.offset(d);
+
+        let srClock,ssClock;
+        if(isPD){srClock=0;ssClock=24;}
+        else if(isPN){continue;}
+        else{srClock=12-srHA/15+co;ssClock=12+srHA/15+co;}
+
+        // Daylight stripe
+        const y1=yOff+(Math.max(tMin,srClock)-tMin)/tRange*ribbonH;
+        const y2=yOff+(Math.min(tMax,ssClock)-tMin)/tRange*ribbonH;
+        if(y2>y1){
+          ctx.fillStyle="rgba(255,220,80,0.35)";
+          ctx.fillRect(x,y1,Math.max(1,plotW/365),y2-y1);
+        }
+
+        // Highlight waking+daylight overlap (7am-10pm clock)
+        const wakeStart=Math.max(srClock,7),wakeEnd=Math.min(ssClock,22);
+        if(wakeEnd>wakeStart){
+          const wy1=yOff+(Math.max(tMin,wakeStart)-tMin)/tRange*ribbonH;
+          const wy2=yOff+(Math.min(tMax,wakeEnd)-tMin)/tRange*ribbonH;
+          ctx.fillStyle="rgba(255,230,100,0.4)";
+          ctx.fillRect(x,wy1,Math.max(1,plotW/365),wy2-wy1);
+        }
+      }
+
+      // Waking hours boundary lines (7am, 10pm)
+      [7,22].forEach(h=>{
+        const y=yOff+(h-tMin)/tRange*ribbonH;
+        ctx.strokeStyle="rgba(100,200,255,0.35)";ctx.lineWidth=1;ctx.setLineDash([3,3]);
+        ctx.beginPath();ctx.moveTo(margin,y);ctx.lineTo(margin+plotW,y);ctx.stroke();ctx.setLineDash([]);
+      });
+
+      // Sunrise/sunset lines
+      ctx.lineWidth=1.5;
+      ctx.beginPath();
+      for(let d=1;d<=365;d++){
+        const x=margin+(d-1)/364*plotW;
+        const decl=solarDeclination(d);
+        const srHA=sunriseHourAngle(latitude,decl);
+        const co=mode.offset(d);
+        const isPD=Math.abs(latitude+decl)>=90&&latitude*decl>0;
+        const isPN=Math.abs(latitude-decl)>=90&&latitude*decl<0;
+        if(isPD||isPN)continue;
+        const srClock=12-srHA/15+co;
+        const y=yOff+(srClock-tMin)/tRange*ribbonH;
+        if(d===1||Math.abs(latitude+solarDeclination(d-1))>=90)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+      }
+      ctx.strokeStyle=mode.color+"0.8)";ctx.stroke();
+      ctx.beginPath();
+      for(let d=1;d<=365;d++){
+        const x=margin+(d-1)/364*plotW;
+        const decl=solarDeclination(d);
+        const srHA=sunriseHourAngle(latitude,decl);
+        const co=mode.offset(d);
+        const isPD=Math.abs(latitude+decl)>=90&&latitude*decl>0;
+        const isPN=Math.abs(latitude-decl)>=90&&latitude*decl<0;
+        if(isPD||isPN)continue;
+        const ssClock=12+srHA/15+co;
+        const y=yOff+(ssClock-tMin)/tRange*ribbonH;
+        if(d===1||Math.abs(latitude+solarDeclination(d-1))>=90)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+      }
+      ctx.strokeStyle=mode.color+"0.8)";ctx.stroke();
+
+      // Current day marker
+      const dx=margin+(Math.round(doy)-1)/364*plotW;
+      ctx.strokeStyle="rgba(255,255,255,0.4)";ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(dx,yOff);ctx.lineTo(dx,yOff+ribbonH);ctx.stroke();
+
+      // Time axis labels on right
+      ctx.font="8px 'DM Mono', monospace";ctx.fillStyle="rgba(140,160,190,0.4)";ctx.textAlign="left";
+      [4,7,10,13,16,19,22].forEach(h=>{
+        const y=yOff+(h-tMin)/tRange*ribbonH;
+        const hh=h>12?h-12:h===0?12:h;const ap=h>=12?"p":"a";
+        ctx.fillText(`${hh}${ap}`,margin+plotW+4,y+3);
+      });
+    });
+
+    // Month labels at bottom
+    const lastY=2*(ribbonH+10)+30+ribbonH+8;
+    ctx.font="8px 'DM Mono', monospace";ctx.fillStyle="rgba(140,160,190,0.35)";ctx.textAlign="center";
+    MONTHS.forEach((m,i)=>{
+      const doyM=[1,32,61,92,122,153,183,214,245,275,306,336][i];
+      const x=margin+(doyM-1)/364*plotW;
+      ctx.fillText(m,x,lastY);
+    });
+
+    // Legend
+    ctx.font="8px 'DM Mono', monospace";ctx.textAlign="left";
+    const ly=lastY+14;
+    ctx.fillStyle="rgba(255,230,100,0.6)";ctx.fillRect(margin,ly-4,8,8);
+    ctx.fillStyle="rgba(140,160,190,0.4)";ctx.fillText("Daylight during waking hours (7am–10pm)",margin+12,ly+3);
+    ctx.fillStyle="rgba(255,220,80,0.35)";ctx.fillRect(margin+240,ly-4,8,8);
+    ctx.fillStyle="rgba(140,160,190,0.4)";ctx.fillText("Daylight outside waking hours",margin+252,ly+3);
+
+  },[latitude,doy,width]);
+
+  useEffect(()=>{draw();},[draw]);
+  return(<canvas ref={canvasRef} width={width} height={totalH} style={{width:"100%",height:totalH}}/>);
 }
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
@@ -509,6 +876,7 @@ function SolarVisualization(){
   const[speed,setSpeed]=useState(1);
   const[isPlayingYear,setIsPlayingYear]=useState(false);
   const[yearSpeed,setYearSpeed]=useState(1);
+  const[dstMode,setDstMode]=useState("switch");
   const[cam,setCam]=useState(()=>qInitView());
   const containerRef=useRef(null);
   const[dims,setDims]=useState({w:800});
@@ -539,6 +907,7 @@ function SolarVisualization(){
   },[isPlayingYear,yearSpeed]);
 
   const{month,day}=monthDayFromDOY(doy);
+  const clockOffset=getDSTOffset(dstMode,Math.round(doy));
   const noonAz=solarPosition(latitude,solarDeclination(doy),0).azimuth;
   const facingSouth=noonAz>90&&noonAz<270;
   const panelW=dims.w>700?Math.floor(dims.w/2-40):dims.w-40,panelH=Math.floor(panelW*0.85);
@@ -565,11 +934,11 @@ function SolarVisualization(){
         </div>
         <div style={{background:"rgba(10,15,30,0.6)",borderRadius:"12px",border:"1px solid rgba(80,100,140,0.15)",padding:"12px"}}>
           <div style={{...ls,marginBottom:"8px"}}>Horizon View — facing {facingSouth?"south":"north"}</div>
-          <div style={{aspectRatio:"1 / 0.85"}}><HorizonView doy={doy} latitude={latitude} solarHour={solarHour} width={panelW} height={panelH}/></div>
+          <div style={{aspectRatio:"1 / 0.85"}}><HorizonView doy={doy} latitude={latitude} solarHour={solarHour} clockOffset={clockOffset} width={panelW} height={panelH}/></div>
         </div>
       </div>
 
-      <InfoPanel doy={doy} latitude={latitude} solarHour={solarHour}/>
+      <InfoPanel doy={doy} latitude={latitude} solarHour={solarHour} clockOffset={clockOffset}/>
 
       <div style={{marginTop:"16px",background:"rgba(10,15,30,0.6)",borderRadius:"12px",border:"1px solid rgba(80,100,140,0.15)",padding:"16px 18px"}}>
         <div style={{display:"flex",alignItems:"center",gap:"14px",marginBottom:"14px",flexWrap:"wrap"}}>
@@ -578,9 +947,14 @@ function SolarVisualization(){
           </button>
           <div style={{display:"flex",gap:"4px"}}>{speeds.map(s=><button key={s.v} onClick={()=>setSpeed(s.v)} style={{background:speed===s.v?"rgba(100,181,246,0.2)":"rgba(40,50,70,0.4)",border:speed===s.v?"1px solid rgba(100,181,246,0.35)":"1px solid rgba(80,100,140,0.15)",borderRadius:"5px",padding:"4px 10px",color:speed===s.v?"#90CAF9":"rgba(160,170,180,0.5)",fontSize:"10px",fontFamily:"'DM Mono', monospace",cursor:"pointer"}}>{s.l}</button>)}</div>
           <div style={{flex:1,minWidth:"140px"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}><span style={ls}>Time of Day</span><span style={{...vs,color:"#FFD54F",fontWeight:600}}>{formatTime(solarHour)}</span></div>
-            <input type="range" min={0} max={24} step={0.05} value={solarHour} onChange={e=>{setSolarHour(parseFloat(e.target.value));setIsPlaying(false);}} style={{width:"100%",accentColor:"#FFD54F",height:"4px",cursor:"pointer"}}/>
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:"9px",color:"rgba(140,160,190,0.3)",fontFamily:"'DM Mono', monospace",marginTop:"2px"}}><span>12am</span><span>3am</span><span>6am</span><span>9am</span><span>12pm</span><span>3pm</span><span>6pm</span><span>9pm</span><span>12am</span></div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}><span style={ls}>Time of Day</span><span style={{...vs,color:"#FFD54F",fontWeight:600}}>{formatTime(solarHour+clockOffset)}</span></div>
+            <DrumPicker value={solarHour} onChange={setSolarHour} onDragStart={()=>setIsPlaying(false)}
+              min={0} max={24} step={1} accentColor="0,0,0" height={34}
+              labels={[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23].map(h=>{
+                const ch=h+clockOffset;const hh=((ch%24)+24)%24;const h12=hh===0?12:hh>12?hh-12:hh;const ap=hh>=12?"pm":"am";
+                return{at:h,text:`${h12}${ap}`,bold:h%6===0};
+              })}
+            />
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:"14px",marginBottom:"14px",flexWrap:"wrap"}}>
@@ -590,8 +964,10 @@ function SolarVisualization(){
           <div style={{display:"flex",gap:"4px"}}>{[{l:"1×",v:1},{l:"2×",v:2},{l:"4×",v:4}].map(s=><button key={s.v} onClick={()=>setYearSpeed(s.v)} style={{background:yearSpeed===s.v?"rgba(255,180,80,0.2)":"rgba(40,50,70,0.4)",border:yearSpeed===s.v?"1px solid rgba(255,180,80,0.35)":"1px solid rgba(80,100,140,0.15)",borderRadius:"5px",padding:"4px 10px",color:yearSpeed===s.v?"#FFB74D":"rgba(160,170,180,0.5)",fontSize:"10px",fontFamily:"'DM Mono', monospace",cursor:"pointer"}}>{s.l}</button>)}</div>
           <div style={{flex:1,minWidth:"140px"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:"4px"}}><span style={ls}>Date</span><span style={{...vs,color:"#FFB74D",fontWeight:600}}>{MONTHS[month]} {day}</span></div>
-            <input type="range" min={1} max={366} value={Math.round(doy)} onChange={e=>{setDoy(parseInt(e.target.value));setIsPlayingYear(false);}} style={{width:"100%",accentColor:"#FFB74D",height:"4px",cursor:"pointer"}}/>
-            <div style={{display:"flex",justifyContent:"space-between",fontSize:"9px",color:"rgba(140,160,190,0.3)",fontFamily:"'DM Mono', monospace",marginTop:"2px"}}>{MONTHS.map(m=><span key={m}>{m}</span>)}</div>
+            <DrumPicker value={doy} onChange={setDoy} onDragStart={()=>setIsPlayingYear(false)}
+              min={1} max={366} step={1} accentColor="0,0,0" height={34}
+              labels={MONTHS.map((m,i)=>{const d=[1,32,61,92,122,153,183,214,245,275,306,336][i];return{at:d,text:m,bold:i%3===0};})}
+            />
           </div>
         </div>
         <div style={{marginBottom:"12px"}}>
@@ -600,8 +976,36 @@ function SolarVisualization(){
           <div style={{display:"flex",justifyContent:"space-between",fontSize:"9px",color:"rgba(140,160,190,0.3)",fontFamily:"'DM Mono', monospace",marginTop:"4px"}}><span>90°S</span><span>60°S</span><span>30°S</span><span>Equator</span><span>30°N</span><span>60°N</span><span>90°N</span></div>
         </div>
         <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>{presets.map(p=><button key={p.l} onClick={()=>setLatitude(p.v)} style={{background:Math.abs(latitude-p.v)<1?"rgba(100,181,246,0.2)":"rgba(40,50,70,0.5)",border:Math.abs(latitude-p.v)<1?"1px solid rgba(100,181,246,0.4)":"1px solid rgba(80,100,140,0.2)",borderRadius:"6px",padding:"5px 12px",color:Math.abs(latitude-p.v)<1?"#90CAF9":"rgba(180,190,200,0.6)",fontSize:"11px",fontFamily:"'DM Mono', monospace",cursor:"pointer"}}>{p.l}</button>)}</div>
+
+        {/* DST Mode Toggle */}
+        <div style={{marginTop:"14px",paddingTop:"14px",borderTop:"1px solid rgba(80,100,140,0.1)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:"12px",flexWrap:"wrap"}}>
+            <span style={ls}>Clock Mode</span>
+            <div style={{display:"flex",gap:"4px"}}>
+              {[{l:"Standard",v:"standard"},{l:"Switch (US)",v:"switch"},{l:"DST Always",v:"dst"}].map(m=>(
+                <button key={m.v} onClick={()=>setDstMode(m.v)} style={{
+                  background:dstMode===m.v?"rgba(180,140,255,0.2)":"rgba(40,50,70,0.4)",
+                  border:dstMode===m.v?"1px solid rgba(180,140,255,0.4)":"1px solid rgba(80,100,140,0.15)",
+                  borderRadius:"5px",padding:"5px 10px",
+                  color:dstMode===m.v?"#B388FF":"rgba(160,170,180,0.5)",
+                  fontSize:"10px",fontFamily:"'DM Mono', monospace",cursor:"pointer",fontWeight:dstMode===m.v?600:400,
+                }}>{m.l}</button>
+              ))}
+            </div>
+            <span style={{fontSize:"10px",color:"rgba(140,160,190,0.35)",fontFamily:"'DM Mono', monospace"}}>
+              {dstMode==="standard"?"UTC offset +0 year-round":dstMode==="dst"?"UTC offset +1 year-round":"UTC +1 Mar–Nov, +0 Nov–Mar"}
+            </span>
+          </div>
+        </div>
       </div>
-      <div style={{marginTop:"12px",fontSize:"10px",color:"rgba(140,160,190,0.3)",fontFamily:"'DM Mono', monospace",textAlign:"center",letterSpacing:"0.5px"}}>Times shown in solar time · Atmospheric refraction not included · Horizon view auto-faces toward noon sun</div>
+
+      {/* Annual Sunrise/Sunset Ribbon */}
+      <div style={{marginTop:"16px",background:"rgba(10,15,30,0.6)",borderRadius:"12px",border:"1px solid rgba(80,100,140,0.15)",padding:"12px 8px"}}>
+        <div style={{...ls,marginBottom:"8px",paddingLeft:"32px"}}>Annual sunrise & sunset — comparing DST policies at {Math.abs(latitude).toFixed(0)}°{latitude>=0?"N":"S"}</div>
+        <AnnualRibbon latitude={latitude} doy={doy} width={Math.min(dims.w-16,884)}/>
+      </div>
+
+      <div style={{marginTop:"12px",fontSize:"10px",color:"rgba(140,160,190,0.3)",fontFamily:"'DM Mono', monospace",textAlign:"center",letterSpacing:"0.5px"}}>Times shown as clock time · Waking hours 7am–10pm · DST dates approximate (US) · Horizon view auto-faces toward noon sun</div>
     </div>
   );
 }

@@ -901,6 +901,7 @@ function SolarVisualization(){
   const[yearSpeed,setYearSpeed]=useState(1);
   const[dstMode,setDstMode]=useState("standard");
   const[showWaking,setShowWaking]=useState(false);
+  const[infoPinned,setInfoPinned]=useState(false);
   const[cam,setCam]=useState(()=>qInitView());
   const containerRef=useRef(null);
   const[dims,setDims]=useState({w:800});
@@ -943,9 +944,38 @@ function SolarVisualization(){
   return(
     <div ref={containerRef} style={{background:"linear-gradient(170deg,#080c18 0%,#0d1424 50%,#0f1a2e 100%)",minHeight:"100vh",padding:"12px 20px",fontFamily:"'DM Sans', sans-serif",color:"#C8D6E5",boxSizing:"border-box",maxWidth:"900px",margin:"0 auto"}}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-      <div style={{textAlign:"center",marginBottom:"8px"}}>
-        <h1 style={{fontSize:"18px",fontWeight:300,letterSpacing:"3px",textTransform:"uppercase",color:"rgba(200,214,229,0.9)",margin:"0 0 2px 0"}}>Solar Path Explorer</h1>
-        <p style={{fontSize:"10px",color:"rgba(140,160,190,0.5)",fontFamily:"'DM Mono', monospace",letterSpacing:"1px",margin:0}}>Earth's orbit · Axial tilt · The sun across your sky</p>
+      <div style={{display:"flex",alignItems:"center",marginBottom:"8px",position:"relative"}}>
+        <div style={{position:"relative"}}>
+          <div onClick={()=>setInfoPinned(!infoPinned)}
+            style={{width:"22px",height:"22px",borderRadius:"11px",border:"2px solid rgba(255,255,255,0.7)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"rgba(255,255,255,0.85)",fontSize:"13px",fontFamily:"'DM Sans', serif",fontStyle:"italic",fontWeight:700,userSelect:"none",flexShrink:0}}>i</div>
+          {infoPinned&&(
+            <div style={{position:"absolute",top:"28px",left:"0",zIndex:100,width:"380px",maxHeight:"420px",overflowY:"auto",background:"rgba(15,20,38,0.97)",border:"1px solid rgba(100,130,180,0.3)",borderRadius:"10px",padding:"14px 16px",boxShadow:"0 8px 32px rgba(0,0,0,0.5)",fontSize:"12px",lineHeight:"1.6",color:"rgba(200,214,229,0.85)",fontFamily:"'DM Sans', sans-serif"}}>
+              {infoPinned&&(
+                <div onClick={()=>setInfoPinned(false)}
+                  style={{position:"absolute",top:"8px",right:"8px",width:"20px",height:"20px",borderRadius:"3px",border:"2px solid rgba(200,210,230,0.5)",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",color:"rgba(200,210,230,0.8)",fontSize:"13px",fontWeight:700,fontFamily:"'DM Mono', monospace",lineHeight:1}}>✕</div>
+              )}
+              <div style={{fontWeight:600,fontSize:"13px",marginBottom:"10px",color:"rgba(200,214,229,0.95)"}}>Things to explore</div>
+              <div style={{marginBottom:"10px"}}>Here are some specific latitudes and times of year to look at where interesting things happen. At any time, feel free to drag the Orbital View to see the Sun–Earth system at different angles to better visualize what's happening.</div>
+              <ul style={{margin:"0 0 10px 8px",padding:0,listStyle:"none"}}>
+                <li style={{marginBottom:"4px",paddingLeft:"12px",position:"relative"}}><span style={{position:"absolute",left:0,top:"6px",width:"4px",height:"4px",borderRadius:"2px",background:"rgba(255,255,255,0.8)",display:"inline-block"}}/>Click the June Solstice button to put the Earth at that time of year, then use the Latitude slider to go from pole to pole. Observe how the sun arc changes in the Horizon View for different latitude locations.</li>
+                <li style={{marginBottom:"4px",paddingLeft:"12px",position:"relative"}}><span style={{position:"absolute",left:0,top:"6px",width:"4px",height:"4px",borderRadius:"2px",background:"rgba(255,255,255,0.8)",display:"inline-block"}}/>Now click the March Equinox button and do the same. What do you observe that's different? In particular, there's something that's equal when at the equinox no matter what your latitude.</li>
+              </ul>
+              <ul style={{margin:"0 0 10px 8px",padding:0,listStyle:"none"}}>
+                <li style={{marginBottom:"4px",paddingLeft:"12px",position:"relative"}}><span style={{position:"absolute",left:0,top:"6px",width:"4px",height:"4px",borderRadius:"2px",background:"rgba(255,255,255,0.8)",display:"inline-block"}}/>Click Play Year and select 4x speed. Click each of the nine different Latitude buttons and observe how the sun arcs are different over the course of a year at each location.</li>
+                <li style={{marginBottom:"4px",paddingLeft:"12px",position:"relative"}}><span style={{position:"absolute",left:0,top:"6px",width:"4px",height:"4px",borderRadius:"2px",background:"rgba(255,255,255,0.8)",display:"inline-block"}}/>What do you notice about the length of day when at the Arctic Circle on the Summer Solstice? This is what defines the Arctic and Antarctic circles.</li>
+              </ul>
+              <ul style={{margin:"0 0 10px 8px",padding:0,listStyle:"none"}}>
+                <li style={{marginBottom:"4px",paddingLeft:"12px",position:"relative"}}><span style={{position:"absolute",left:0,top:"6px",width:"4px",height:"4px",borderRadius:"2px",background:"rgba(255,255,255,0.8)",display:"inline-block"}}/>Notice that when playing the year at the Equator, the Horizon View flips from north facing to south facing and back again. Notice how the sun arc looks just before it flips.</li>
+                <li style={{marginBottom:"4px",paddingLeft:"12px",position:"relative"}}><span style={{position:"absolute",left:0,top:"6px",width:"4px",height:"4px",borderRadius:"2px",background:"rgba(255,255,255,0.8)",display:"inline-block"}}/>Now go to one of the Tropics while the year is being played. Notice how at the Solstice dates, the sun arc looks similar to the Equator just before doing a N–S or S–N flip, but doesn't actually flip. This is what defines the Tropic circles.</li>
+              </ul>
+            </div>
+          )}
+        </div>
+        <div style={{flex:1,textAlign:"center"}}>
+          <h1 style={{fontSize:"18px",fontWeight:300,letterSpacing:"3px",textTransform:"uppercase",color:"rgba(200,214,229,0.9)",margin:"0 0 2px 0"}}>Solar Path Explorer</h1>
+          <p style={{fontSize:"10px",color:"rgba(140,160,190,0.5)",fontFamily:"'DM Mono', monospace",letterSpacing:"1px",margin:0}}>Earth's orbit · Axial tilt · The sun across your sky</p>
+        </div>
+        <div style={{width:"22px",flexShrink:0}}/>
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:dims.w>700?"1fr 1fr":"1fr",gap:"10px",marginBottom:"6px"}}>
